@@ -1,0 +1,411 @@
+[
+  {
+    "unique_id": "btgood52",
+    "type": "button",
+    "tag": "a",
+    "text": "Google apps",
+    "xpath": "/html[1]/body[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/a[1]",
+    "id": "",
+    "class": "gb_B",
+    "aria-label": "Google apps"
+  },
+  {
+    "unique_id": "btclo942",
+    "type": "button",
+    "tag": "button",
+    "text": "close",
+    "xpath": "//*[@id=\"spchx\"]",
+    "id": "spchx",
+    "class": "pz5bj",
+    "aria-label": "close"
+  },
+  {
+    "unique_id": "btvoyc1d",
+    "type": "button",
+    "tag": "div",
+    "text": "",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[1]/div[1]/div[3]/div[1]/div[1]",
+    "id": "",
+    "class": "vOY7J",
+    "aria-label": " Clear"
+  },
+  {
+    "unique_id": "btsea43f",
+    "type": "button",
+    "tag": "div",
+    "text": "Search by voice",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[1]/div[1]/div[3]/div[2]",
+    "id": "",
+    "class": "XDyW0e",
+    "aria-label": "Search by voice"
+  },
+  {
+    "unique_id": "btsea477",
+    "type": "button",
+    "tag": "div",
+    "text": "Search by image",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[1]/div[1]/div[3]/div[3]",
+    "id": "",
+    "class": "nDcEnd",
+    "aria-label": "Search by image"
+  },
+  {
+    "unique_id": "btcloa18",
+    "type": "button",
+    "tag": "span",
+    "text": "Close Choose what you\u2019re giving feedback on",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[2]/div[2]/div[1]/span[1]",
+    "id": "",
+    "class": "Job8vb z1asCe wuXmqc",
+    "aria-label": "Close Choose what you\u2019re giving feedback on"
+  },
+  {
+    "unique_id": "btu483ab",
+    "type": "button",
+    "tag": "div",
+    "text": ".U48fD{-webkit-tap-highlight-color:transparent;cursor:pointer;display:block;line-height:18px;text-overflow:ellipsis;white-space:nowrap;padding:16px;padding-top:0;margin-top:16px;position:relative}.TQc1id .U48fD{margin-top:16px}.U48fD.df13ud{margin-top:16px}.U48fD.TOQyFc{margin-top:0}.U48fD.p8FEIf{padding-bottom:0}.U48fD.ke7M4{padding-left:0;padding-right:0}.jRKCUd::before{bottom:12px;content:'';left:16px;position:absolute;right:16px;top:-4px}a.jRKCUd:hover{text-decoration:none}.ZFiwCf{display:flex;align-items:center;justify-content:center;position:relative;margin:0 auto;width:100%;border-radius:18px;outline:1px solid transparent;background-color:#f1f3f4;font-size:14px;font-family:Google Sans,Roboto,Arial,sans-serif;font-weight:400;line-height:20px;max-width:372px;min-height:40px;border-radius:20px;}@media (forced-colors:active){.ZFiwCf{border:1px solid transparent}}.TQc1id .ZFiwCf{max-width:unset}.Zjtggb .ZFiwCf{max-width:unset}.ZFiwCf:hover{background-color:#fafafa}.nCFUpc .ZFiwCf{width:100%}.Bi9oQd{background-color:var(--gS5jXb);margin-top:18px;position:absolute;border:0;height:1px;left:0;width:100%;margin-top:20px;}.TQc1id .Bi9oQd{display:none}.kC8B4e .Bi9oQd{display:none}.w2fKdd svg{width:auto}.w2fKdd{color:var(--IXoxUe)}.LGwnxb{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:auto;padding-left:0;padding-right:8px;color:#202124;max-width:calc(100% - 64px);}.LGwnxb:empty{padding-right:0}.LGwnxb span,.LGwnxb div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:auto}See more",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[2]/div[4]/li[1]/div[1]/div[2]/div[2]",
+    "id": "",
+    "class": "Sz7Lee MagqMc U48fD",
+    "aria-label": "See more"
+  },
+  {
+    "unique_id": "btjch4f6",
+    "type": "button",
+    "tag": "div",
+    "text": ".JCHpcb:hover,.LvqzR .JCHpcb{color:#1558d6;text-decoration:underline}.JCHpcb{color:#70757a;font:13px arial,sans-serif;cursor:pointer;align-self:center}@media (hover:hover){.sbai{visibility:hidden}.sbhl .sbai{visibility:inherit}}Delete",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[2]/div[4]/li[1]/div[1]/div[3]",
+    "id": "",
+    "class": "AQZ9Vd",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "btwor918",
+    "type": "button",
+    "tag": "div",
+    "text": "Word pronunciation",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[2]/div[4]/li[2]/div[1]/div[1]/div[1]/div[2]",
+    "id": "",
+    "class": "Tnv2td",
+    "aria-label": "Word pronunciation"
+  },
+  {
+    "unique_id": "btdel355",
+    "type": "button",
+    "tag": "div",
+    "text": "Delete",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[2]/div[4]/li[3]/div[1]/div[3]",
+    "id": "",
+    "class": "AQZ9Vd",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "btwor5f5",
+    "type": "button",
+    "tag": "div",
+    "text": "Word pronunciation",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[2]/div[4]/div[5]/div[1]/div[2]",
+    "id": "",
+    "class": "Tnv2td",
+    "aria-label": "Word pronunciation"
+  },
+  {
+    "unique_id": "btgoof5d",
+    "type": "submit",
+    "tag": "input",
+    "text": "Google Search",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[2]/div[4]/div[6]/center[1]/input[1]",
+    "id": "",
+    "class": "gNO89b",
+    "aria-label": "Google Search"
+  },
+  {
+    "unique_id": "btimf73a",
+    "type": "submit",
+    "tag": "input",
+    "text": "I'm Feeling Lucky",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[2]/div[4]/div[6]/center[1]/input[2]",
+    "id": "",
+    "class": "RNmpXc",
+    "aria-label": "I'm Feeling Lucky"
+  },
+  {
+    "unique_id": "btrepc82",
+    "type": "button",
+    "tag": "div",
+    "text": "Report inappropriate predictions",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[2]/div[5]/div[1]",
+    "id": "",
+    "class": "WzNHm mWcf0e",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "btgoo3a2",
+    "type": "submit",
+    "tag": "input",
+    "text": "Google Search",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[3]/center[1]/input[1]",
+    "id": "",
+    "class": "gNO89b",
+    "aria-label": "Google Search"
+  },
+  {
+    "unique_id": "btimf11b",
+    "type": "submit",
+    "tag": "input",
+    "text": "I'm Feeling Lucky",
+    "xpath": "//*[@id=\"gbqfbb\"]",
+    "id": "gbqfbb",
+    "class": "",
+    "aria-label": "I'm Feeling Lucky"
+  },
+  {
+    "unique_id": "btimfa88",
+    "type": "button",
+    "tag": "div",
+    "text": "I'm Feeling CuriousI'm Feeling HungryI'm Feeling AdventurousI'm Feeling PlayfulI'm Feeling StellarI'm Feeling DoodleyI'm Feeling TrendyI'm Feeling ArtisticI'm Feeling Funny",
+    "xpath": "/html[1]/body[1]/div[1]/div[3]/form[1]/div[1]/div[1]/div[3]/center[1]/div[1]",
+    "id": "",
+    "class": "gbqfba gbqfba-hvr",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "btsetd96",
+    "type": "button",
+    "tag": "div",
+    "text": "Settings",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[3]/span[1]/span[1]/g-popup[1]/div[1]",
+    "id": "",
+    "class": "CcNe6e",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "btstac5b",
+    "type": "button",
+    "tag": "div",
+    "text": "Stay signed out",
+    "xpath": "/html[1]/body[1]/div[4]/div[1]/div[2]/div[1]/div[1]/div[1]/div[2]/div[1]/promo-button-text[1]/div[1]",
+    "id": "",
+    "class": "cvSVBe btku5b fCrZyc NQYJvc FR7ZSc",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "btsig408",
+    "type": "button",
+    "tag": "div",
+    "text": "Sign in",
+    "xpath": "/html[1]/body[1]/div[4]/div[1]/div[2]/div[1]/div[1]/div[1]/div[2]/div[1]/promo-button-text[2]/div[1]",
+    "id": "",
+    "class": "cvSVBe btku5b fCrZyc NQYJvc expUPd",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "insea1cb",
+    "type": "textarea",
+    "tag": "textarea",
+    "placeholder": "",
+    "value": "",
+    "xpath": "//*[@id=\"APjFqb\"]",
+    "id": "APjFqb",
+    "class": "gLFyf",
+    "aria-label": "Search"
+  },
+  {
+    "unique_id": "incsi919",
+    "type": "textarea",
+    "tag": "textarea",
+    "placeholder": "",
+    "value": "",
+    "xpath": "/html[1]/body[1]/textarea[1]",
+    "id": "",
+    "class": "csi",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkabo2c1",
+    "type": "link",
+    "tag": "a",
+    "text": "About",
+    "href": "https://about.google/?fg=1&utm_source=google-US&utm_medium=referral&utm_campaign=hp-header",
+    "xpath": "/html[1]/body[1]/div[1]/div[1]/a[1]",
+    "id": "",
+    "class": "MV3Tnb",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkstof11",
+    "type": "link",
+    "tag": "a",
+    "text": "Store",
+    "href": "https://store.google.com/US?utm_source=hp_header&utm_medium=google_ooo&utm_campaign=GS100042&hl=en-US",
+    "xpath": "/html[1]/body[1]/div[1]/div[1]/a[2]",
+    "id": "",
+    "class": "MV3Tnb",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkgmaf74",
+    "type": "link",
+    "tag": "a",
+    "text": "Gmail",
+    "href": "https://mail.google.com/mail/&ogbl",
+    "xpath": "/html[1]/body[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/a[1]",
+    "id": "",
+    "class": "gb_X",
+    "aria-label": "Gmail "
+  },
+  {
+    "unique_id": "lkimaedf",
+    "type": "link",
+    "tag": "a",
+    "text": "Images",
+    "href": "https://www.google.com/imghp?hl=en&ogbl",
+    "xpath": "/html[1]/body[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/a[1]",
+    "id": "",
+    "class": "gb_X",
+    "aria-label": "Search for Images "
+  },
+  {
+    "unique_id": "lkgood52",
+    "type": "link",
+    "tag": "a",
+    "text": "Google apps",
+    "href": "https://www.google.com/intl/en/about/products",
+    "xpath": "/html[1]/body[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/div[1]/div[1]/div[1]/a[1]",
+    "id": "",
+    "class": "gb_B",
+    "aria-label": "Google apps"
+  },
+  {
+    "unique_id": "lksigd8a",
+    "type": "link",
+    "tag": "a",
+    "text": "Sign in",
+    "href": "https://accounts.google.com/ServiceLogin?hl=en&passive=true&continue=https://www.google.com/&ec=futura_ctr_og_so_72776761_p",
+    "xpath": "/html[1]/body[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[1]/div[2]/a[1]",
+    "id": "",
+    "class": "gb_Ua gb_zd gb_qd gb_hd",
+    "aria-label": "Sign in"
+  },
+  {
+    "unique_id": "lkadv0bc",
+    "type": "link",
+    "tag": "a",
+    "text": "Advertising",
+    "href": "https://www.google.com/intl/en_us/ads/?subid=ww-ww-et-g-awa-a-g_hpafoot1_1!o2&utm_source=google.com&utm_medium=referral&utm_campaign=google_hpafooter&fg=1",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[1]/a[1]",
+    "id": "",
+    "class": "pHiOh",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkbusa7f",
+    "type": "link",
+    "tag": "a",
+    "text": "Business",
+    "href": "https://www.google.com/services/?subid=ww-ww-et-g-awa-a-g_hpbfoot1_1!o2&utm_source=google.com&utm_medium=referral&utm_campaign=google_hpbfooter&fg=1",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[1]/a[2]",
+    "id": "",
+    "class": "pHiOh",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkhowea6",
+    "type": "link",
+    "tag": "a",
+    "text": "How Search works",
+    "href": "https://google.com/search/howsearchworks/?fg=1",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[1]/a[3]",
+    "id": "",
+    "class": "pHiOh",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkappffd",
+    "type": "link",
+    "tag": "a",
+    "text": "Applying AI towards science and the environment",
+    "href": "https://ai.google/advancing-ai/social-impact/?utm_source=googlehpfooter&utm_medium=housepromos&utm_campaign=bottom-footer&utm_content=",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[2]/a[1]",
+    "id": "",
+    "class": "pHiOh",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkpri757",
+    "type": "link",
+    "tag": "a",
+    "text": "Privacy",
+    "href": "https://policies.google.com/privacy?hl=en&fg=1",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[3]/a[1]",
+    "id": "",
+    "class": "pHiOh",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkter6b9",
+    "type": "link",
+    "tag": "a",
+    "text": "Terms",
+    "href": "https://policies.google.com/terms?hl=en&fg=1",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[3]/a[2]",
+    "id": "",
+    "class": "pHiOh",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lksea4b5",
+    "type": "link",
+    "tag": "a",
+    "text": "Search settings",
+    "href": "https://www.google.com/preferences?hl=en&fg=1",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[3]/span[1]/span[1]/g-popup[1]/div[2]/g-menu[1]/g-menu-item[1]/div[1]/a[1]",
+    "id": "",
+    "class": "",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkadv086",
+    "type": "link",
+    "tag": "a",
+    "text": "Advanced search",
+    "href": "/advanced_search?hl=en&fg=1",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[3]/span[1]/span[1]/g-popup[1]/div[2]/g-menu[1]/g-menu-item[2]/div[1]/a[1]",
+    "id": "",
+    "class": "",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkyou3bd",
+    "type": "link",
+    "tag": "a",
+    "text": "Your data in Search",
+    "href": "/history/privacyadvisor/search/unauth?utm_source=googlemenu&fg=1&cctld=com",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[3]/span[1]/span[1]/g-popup[1]/div[2]/g-menu[1]/g-menu-item[3]/div[1]/a[1]",
+    "id": "",
+    "class": "",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lksea10e",
+    "type": "link",
+    "tag": "a",
+    "text": "Search history",
+    "href": "/history/optout?hl=en&fg=1",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[3]/span[1]/span[1]/g-popup[1]/div[2]/g-menu[1]/g-menu-item[4]/div[1]/a[1]",
+    "id": "",
+    "class": "",
+    "aria-label": ""
+  },
+  {
+    "unique_id": "lkseaf54",
+    "type": "link",
+    "tag": "a",
+    "text": "Search help",
+    "href": "https://support.google.com/websearch/?p=ws_results_help&hl=en&fg=1",
+    "xpath": "/html[1]/body[1]/div[1]/div[6]/div[1]/div[1]/div[3]/span[1]/span[1]/g-popup[1]/div[2]/g-menu[1]/g-menu-item[5]/div[1]/a[1]",
+    "id": "",
+    "class": "",
+    "aria-label": ""
+  }
+]

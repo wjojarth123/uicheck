@@ -1,0 +1,7 @@
+playwright==1.41.2
+requests==2.31.0
+python-dotenv==1.0.0
+cohere>=4.32
+argparse>=1.4.0
+networkx==3.1
+matplotlib==3.7.1 
