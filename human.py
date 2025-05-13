@@ -213,7 +213,7 @@ async def detect_and_dismiss_modals(page):
 # --- Function to interact with the page based on commands ---
 async def handle_interaction(page, command, elements_dict):
     """
-    Handle interaction commands: BACKBTN, CLICK, TYPE, HOVER, DISMISS
+    Handle interaction commands: BACKBTN, CLICK <unique_id>, TYPE <unique_id> <text>, HOVER <unique_id>, DISMISS
     Returns True if the action might have caused a navigation
     """
     cmd_parts = command.strip().split()
@@ -226,19 +226,18 @@ async def handle_interaction(page, command, elements_dict):
     for unique_id, element_data in elements_dict.items():
         elements_dict_lower[unique_id.lower()] = element_data
     
-    action = cmd_parts[0].upper()
     
-    # Handle DISMISS command to close modals/popups
-    if action == "DISMISS":
-        print("Attempting to dismiss any modal popups...")
+    # Automatically check for and dismiss modals/popups before any interaction
+    if "DISMISS" in command:
+        print("Checking for modal popups before interaction...")
         modal_dismissed = await detect_and_dismiss_modals(page)
         if modal_dismissed:
-            print("Successfully dismissed modal/popup")
+            print("Successfully dismissed modal/popup before interaction")
         else:
-            print("No modal/popup detected or could not dismiss")
-        return False  # Modal dismissal typically doesn't cause navigation
+            print("No modal/popup detected before interaction")
     
-    if action == "BACKBTN":
+    # Handle DISMISS command to close modals/popups
+    if "BACKBTN" in command:
         print("Going back in browser history")
         try:
             await page.go_back()
@@ -247,8 +246,8 @@ async def handle_interaction(page, command, elements_dict):
             print(f"Error going back: {e}")
             return False
     
-    elif action == "CLICK" and len(cmd_parts) >= 2:
-        target_id = cmd_parts[1].lower()
+    elif "CLICK" in command and len(cmd_parts) >= 2:
+        target_id = cmd_parts[-1].lower()
         if target_id in elements_dict_lower:
             element_data = elements_dict_lower[target_id]
             xpath = element_data.get('xpath')
@@ -266,7 +265,79 @@ async def handle_interaction(page, command, elements_dict):
                 if element_type in ["checkbox", "radio"]:
                     await page.check(f"xpath={xpath}", timeout=5000)
                 else:
-                    await page.click(f"xpath={xpath}", timeout=5000)
+                    print(f"Clicking element: {target_id} (XPath: {xpath})")
+                    
+                    # Strategy 1: Try JavaScript click first
+                    try:
+                        print("Trying JavaScript click...")
+                        await page.evaluate(f"""
+                            (xpath) => {{
+                                const element = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                                if (element) {{
+                                    element.click();
+                                    return true;
+                                }}
+                                return false;
+                            }}
+                        """, xpath)
+                    except Exception as js_error:
+                        print(f"JavaScript click failed: {js_error}")
+                        
+                        # Strategy 2: Try force click
+                        try:
+                            print("Trying force click...")
+                            await page.click(f"xpath={xpath}", force=True, timeout=5000)
+                        except Exception as force_error:
+                            print(f"Force click failed: {force_error}")
+                            
+                            # Strategy 3: Check for intercepting element and click it instead
+                            try:
+                                print("Checking for intercepting element...")
+                                intercepting_element = await page.evaluate(f"""
+                                    (xpath) => {{
+                                        const element = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                                        if (!element) return null;
+                                        
+                                        // Get element position
+                                        const rect = element.getBoundingClientRect();
+                                        const centerX = rect.left + rect.width / 2;
+                                        const centerY = rect.top + rect.height / 2;
+                                        
+                                        // Check what element is actually at that point
+                                        const elementAtPoint = document.elementFromPoint(centerX, centerY);
+                                        
+                                        if (elementAtPoint && elementAtPoint !== element) {{
+                                            // We found an intercepting element
+                                            return {{
+                                                intercepts: true,
+                                                tag: elementAtPoint.tagName.toLowerCase(),
+                                                href: elementAtPoint.href || "",
+                                                xpath: window.getXPath(elementAtPoint)
+                                            }};
+                                        }}
+                                        
+                                        return null;
+                                    }}
+                                """, xpath)
+                                
+                                if intercepting_element:
+                                    print(f"Found intercepting element: {intercepting_element['tag']} (XPath: {intercepting_element['xpath']})")
+                                    
+                                    # Click the intercepting element instead
+                                    if intercepting_element['tag'] == 'a' and intercepting_element['href']:
+                                        print(f"Clicking intercepting link with href: {intercepting_element['href']}")
+                                        await page.goto(intercepting_element['href'], timeout=10000)
+                                    else:
+                                        print(f"Clicking intercepting element via XPath")
+                                        await page.click(f"xpath={intercepting_element['xpath']}", timeout=5000)
+                                else:
+                                    # Last resort: Regular click
+                                    print("No intercepting element found, trying regular click...")
+                                    await page.click(f"xpath={xpath}", timeout=5000)
+                            except Exception as intercept_error:
+                                print(f"Error handling intercepting element: {intercept_error}")
+                                # Fall back to regular click as last resort
+                                await page.click(f"xpath={xpath}", timeout=5000)
                 
                 # Give a short delay for any immediate DOM updates
                 await asyncio.sleep(0.5)
@@ -343,8 +414,8 @@ async def handle_interaction(page, command, elements_dict):
             print(f"Element with ID {target_id} not found. Available IDs: {', '.join(elements_dict_lower.keys())}")
             return False
     
-    elif action == "TYPE" and len(cmd_parts) >= 3:
-        target_id = cmd_parts[1].lower()
+    elif "TYPE" in command and len(cmd_parts) >= 3:
+        target_id = cmd_parts[-1].lower()
         text_to_type = ' '.join(cmd_parts[2:])
         if target_id in elements_dict_lower:
             element_data = elements_dict_lower[target_id]
@@ -371,8 +442,8 @@ async def handle_interaction(page, command, elements_dict):
             print(f"Element with ID {target_id} not found. Available IDs: {', '.join(elements_dict_lower.keys())}")
             return False
     
-    elif action == "HOVER" and len(cmd_parts) >= 2:
-        target_id = cmd_parts[1].lower()
+    elif "HOVER" in command and len(cmd_parts) >= 2:
+        target_id = cmd_parts[-1].lower()
         if target_id in elements_dict_lower:
             element_data = elements_dict_lower[target_id]
             xpath = element_data.get('xpath')
@@ -405,11 +476,30 @@ async def process_page_content(page, visited_urls, force_reprocess=False):
     Returns a dictionary mapping unique IDs to element data for interaction commands
     """
     try:
-        await page.wait_for_load_state('domcontentloaded', timeout=10000)
+        # Wait for multiple load states to ensure page is fully ready
+        print(f"Waiting for page to load completely: {page.url}")
+        try:
+            # First wait for basic DOM content loaded
+            await page.wait_for_load_state('domcontentloaded', timeout=10000)
+            
+            # Then wait for network to be mostly idle (no more than 2 connections for at least 500ms)
+            await page.wait_for_load_state('networkidle', timeout=10000)
+            
+            # Also wait for the page to be visually stable
+            await asyncio.sleep(1)  # Short additional delay for stability
+        except Exception as load_error:
+            print(f"Warning: Could not confirm complete page load: {load_error}")
+            # Continue anyway since some elements might still be accessible
+    
+        # Ensure we have a valid page context before proceeding
+        if page.url == "about:blank" or not page.url:
+            print("Page is blank or has no URL, skipping processing")
+            return {}
+            
     except Exception as e:
-        print(f"Timeout waiting for DOMContentLoaded for {page.url}: {e}")
-        # Optionally return if DOM isn't ready, or proceed cautiously
-
+        print(f"Error waiting for page load states: {e}")
+        await asyncio.sleep(2)  # Give more time for page to stabilize before continuing
+        
     url = page.url
     if not force_reprocess and url in visited_urls and url != "about:blank":
         print(f"Skipping already processed URL: {url}")
@@ -582,24 +672,51 @@ async def interactive_shell(page, visited_urls):
             continue
         
         # Handle the command
-        might_navigate = await handle_interaction(page, command, current_elements)
-        
-        if might_navigate:
-            # Wait for potential navigation to complete
-            try:
-                await page.wait_for_load_state('load', timeout=5000)
-                print("Page load detected, re-processing page...")
-                await asyncio.sleep(0.5)  # Short delay to ensure page is fully loaded
-            except TimeoutError:
-                print("No page load detected after interaction")
+        try:
+            might_navigate = await handle_interaction(page, command, current_elements)
             
-            # Re-process the page content to get updated elements
-            current_elements = await process_page_content(page, visited_urls, force_reprocess=True)
-        else:
-            # If no navigation is expected, wait a short time and then re-process anyway
-            print("Waiting for DOM updates...")
-            await asyncio.sleep(1)
-            current_elements = await process_page_content(page, visited_urls, force_reprocess=True)
+            if might_navigate:
+                # Wait for potential navigation to complete
+                try:
+                    print("Possible navigation detected, waiting for page to stabilize...")
+                    # Wait for navigation to complete with a generous timeout
+                    await page.wait_for_load_state('networkidle', timeout=15000)
+                    print("Page appears to be stable, processing elements...")
+                    await asyncio.sleep(1.5)  # Give extra time for any JS to execute
+                except Exception as nav_error:
+                    print(f"Navigation wait error: {nav_error}")
+                    print("Continuing with processing anyway...")
+                    await asyncio.sleep(3)  # Give even more time to stabilize
+                
+                # Retry processing a few times if needed
+                max_retries = 3
+                for retry in range(max_retries):
+                    try:
+                        print(f"Processing page content (attempt {retry+1}/{max_retries})...")
+                        current_elements = await process_page_content(page, visited_urls, force_reprocess=True)
+                        if current_elements:  # If we got elements, we're good
+                            break
+                        await asyncio.sleep(1)  # Wait before retrying
+                    except Exception as process_error:
+                        print(f"Error processing page on attempt {retry+1}: {process_error}")
+                        if retry < max_retries - 1:  # If not the last retry
+                            print("Waiting before retrying...")
+                            await asyncio.sleep(2)
+                
+                if not current_elements:
+                    print("Warning: Could not successfully process page elements after navigation.")
+                    print("You can try using the DISMISS command if there are popups, or retry your last command.")
+            else:
+                # If no navigation is expected, wait a short time and then re-process anyway
+                print("Waiting for DOM updates...")
+                await asyncio.sleep(1)
+                try:
+                    current_elements = await process_page_content(page, visited_urls, force_reprocess=True)
+                except Exception as process_error:
+                    print(f"Error processing page after interaction: {process_error}")
+        except Exception as interaction_error:
+            print(f"Error during command execution: {interaction_error}")
+            print("Try using the DISMISS command if there are popups, or try again.")
 
 # --- Main execution function ---
 async def main():
@@ -609,7 +726,7 @@ async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         page = await browser.new_page()
-        
+
         await page.add_init_script("""
         function getXPath(element) {
             if (element && element.id) {
