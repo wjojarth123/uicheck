@@ -117,13 +117,16 @@ class GeminiBrowser:
         # Get the raw HTML
         raw_html = await current_page.content()
         
-        # Clean the HTML to reduce token count
-        cleaned_html = clean_html_string(raw_html)
+        # Count occurrences of 'ata-unique-id' in the HTML
+        
+        # Clean the HTML to reduce token count while preserving 'data-unique-id'
+        cleaned_html  = clean_html_string(raw_html)
+        data_unique_id_count = raw_html.count("data-unique-id")
+        print(f"INFO: 'data-unique-id' appears {data_unique_id_count} times in the HTML.")
         
         # Elements are now retrieved via an explicit command, not automatically here
         # Get the interactive elements on the page
-        # elements = await self.browser.get_elements(current_page)
-        elements = self._cached_elements.get(current_page.url, {}) # Use cached elements
+        elements = self._cached_elements.get(current_page.url, {})  # Use cached elements
         
         # Get the current URL
         url = current_page.url
@@ -140,22 +143,6 @@ class GeminiBrowser:
     
     def _create_prompt(self, page_data: Dict, task_description: Optional[str] = None) -> str:
         """Create a prompt for Gemini API based on the page data and task."""
-        elements_section = "No elements have been listed yet. Use the ELEMENTS command to list interactive elements."
-        if page_data["elements"]:
-            elements_section = "Available interactive elements:\n"
-            for elem_id, elem_info in page_data["elements"].items():
-                elem_type = elem_info.get("element_type", "unknown")
-                if elem_type in ["button", "submit", "link"]:
-                    display_text = elem_info.get("text", "")
-                elif elem_type in ["text", "email", "password", "search", "tel", "url", "number", "textarea"]:
-                    display_text = elem_info.get("placeholder", "") or elem_info.get("name", "")
-                elif elem_type in ["select", "checkbox", "radio"]:
-                    display_text = elem_info.get("name", "")
-                else:
-                    display_text = elem_info.get("text", "") or elem_info.get("aria_label", "")
-                
-                elements_section += f"ID: {elem_id}, Type: {elem_type}, Text: {display_text}\n"
-        
         # Create context from previous interactions (limited to last 5)
         history_section = ""
         if self.interaction_history:
@@ -172,7 +159,6 @@ Page Title: {page_data['title']}
 
 {history_section}
 
-{elements_section}
 
 HTML Content (condensed, first 7000 characters):
 {page_data['html'][:7000]}...
@@ -180,7 +166,6 @@ HTML Content (condensed, first 7000 characters):
 {f'Task: {task_description}' if task_description else 'Determine the next action to take on this page.'}
 
 Respond with a single command on a new line in one of these formats, followed by an explanation:
-- ELEMENTS (List interactive elements on the current page)
 - LIST PAGES (List all open browser tabs)
 - SWITCH N (Switch to page number N)
 - GOTO url (Navigate to URL)
@@ -256,14 +241,7 @@ Explanation: [brief explanation of why you\'re suggesting this action]
         print(f"Executing action: {action} on page: {current_page.url if current_page else 'N/A'}")
         
         # Handle specific commands that don't map directly to handle_interaction
-        if action == "ELEMENTS":
-            print("Processing page content to list elements...")
-            elements = await self.browser.process_page_content(current_page, force_reprocess=True)
-            self._cached_elements[current_page.url] = elements
-            # Return the elements dictionary so the AI can use it in the next prompt
-            return {"action_type": "ELEMENTS_LISTED", "elements": elements}
-        
-        elif action == "LIST PAGES":
+        if action == "LIST PAGES":
             print("Listing open pages...")
             pages_info = []
             if self.browser._pages:
@@ -284,7 +262,6 @@ Explanation: [brief explanation of why you\'re suggesting this action]
                     print(f"Switched to page {page_num}: {new_page.url}")
                     # Clear cached elements for the previous page if needed
                     self._cached_elements.pop(current_page.url, None)
-                    # The AI should explicitly request ELEMENTS for the new page
                     return True # Action successful
                 else:
                     print(f"Invalid page number: {page_num}")
@@ -482,4 +459,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Unhandled exception in main loop: {e}")
         import traceback
-        traceback.print_exc() 
+        traceback.print_exc()
