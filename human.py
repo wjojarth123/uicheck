@@ -415,245 +415,160 @@ class HumanBrowser:
         print(f"INFO (HumanBrowser): Processing page content: {current_url}")
         
         try:
+            # Check for and dismiss any modal dialogs first
+            modal_dismissed = await self.detect_and_dismiss_modals(page)
+            if modal_dismissed:
+                # If we dismissed something, wait a moment and recheck the page
+                await asyncio.sleep(1)
+                
             # Wait for the page to stabilize
             await self._wait_for_page_stability(page)
             
-            # Dictionary to store elements by ID
             elements_dict = {}
             
-            # Process buttons (including submit inputs)
-            buttons = await page.query_selector_all('button, input[type="submit"], input[type="button"]')
-            for idx, button in enumerate(buttons):
-                try:
-                    if not await button.is_visible():
-                        continue
-                        
-                    text = await button.text_content() or ""
-                    text = text.strip()
-                    
-                    value_attr = await button.get_attribute("value") or ""
-                    if not text and value_attr:
-                        text = value_attr
-                        
-                    type_attr = await button.get_attribute("type") or ""
-                    tag_name = await button.evaluate("el => el.tagName.toLowerCase()")
-                    
-                    # Determine element type
-                    element_type = "button"
-                    if tag_name == "input" and type_attr == "submit":
-                        element_type = "submit"
-                        
-                    # Get additional attributes
-                    class_name = await button.get_attribute("class") or ""
-                    aria_label = await button.get_attribute("aria-label") or ""
-                    
-                    # Get XPath
-                    xpath = await button.evaluate("el => window.getXPath(el)")
-                    
-                    # Generate unique ID
-                    unique_id = generate_unique_id(element_type, xpath, text, class_name, aria_label)
-                    
-                    # Store element in dictionary
-                    elements_dict[unique_id] = {
-                        "element_type": element_type,
-                        "text": text,
-                        "xpath": xpath,
-                        "tag_name": tag_name,
-                        "class_name": class_name,
-                        "aria_label": aria_label
-                    }
-                    
-                    print(f"FOUND {element_type}: {unique_id} - '{text or aria_label}'")
-                    
-                except Exception as elem_err:
-                    print(f"Error processing button element: {elem_err}")
+            # Combined selector for all potentially interactive elements.
+            # We will filter for visibility and specific types in the Python loop.
+            combined_selector = (
+                'button, input[type="submit"], input[type="button"], input[type="text"], '
+                'input[type="email"], input[type="password"], input[type="search"], '
+                'input[type="tel"], input[type="url"], input[type="number"], '
+                'input[type="checkbox"], input[type="radio"], '
+                'textarea, select, a, '
+                'div[role="button"], div[role="link"], div[onclick], div[data-identifier]'
+            )
             
-            # Process links
-            links = await page.query_selector_all('a, [role="link"]')
-            for idx, link in enumerate(links):
+            candidate_elements = await page.query_selector_all(combined_selector)
+
+            for element in candidate_elements:
                 try:
-                    if not await link.is_visible():
+                    if not await element.is_visible():
                         continue
-                        
-                    text = await link.text_content() or ""
-                    text = text.strip()
+
+                    # Common attributes
+                    tag_name = (await element.evaluate("el => el.tagName.toLowerCase()")).lower()
+                    xpath = await element.evaluate("el => window.getXPath(el)")
                     
-                    href = await link.get_attribute("href") or ""
-                    
-                    # Get additional attributes
-                    class_name = await link.get_attribute("class") or ""
-                    aria_label = await link.get_attribute("aria-label") or ""
-                    
-                    # Get XPath
-                    xpath = await link.evaluate("el => window.getXPath(el)")
-                    
-                    # Generate unique ID
-                    unique_id = generate_unique_id("link", xpath, text, class_name, aria_label)
-                    
-                    # Store element in dictionary
-                    elements_dict[unique_id] = {
-                        "element_type": "link",
-                        "text": text,
-                        "xpath": xpath,
-                        "href": href,
-                        "class_name": class_name,
-                        "aria_label": aria_label
-                    }
-                    
-                    print(f"FOUND link: {unique_id} - '{text or aria_label}'")
-                    
-                except Exception as elem_err:
-                    print(f"Error processing link element: {elem_err}")
-            
-            # Process input fields
-            inputs = await page.query_selector_all('input[type="text"], input[type="email"], input[type="password"], input[type="search"], input[type="tel"], input[type="url"], input[type="number"], textarea')
-            for idx, input_field in enumerate(inputs):
-                try:
-                    if not await input_field.is_visible():
+                    # If XPath is somehow null or empty, skip (should be rare)
+                    if not xpath:
                         continue
-                        
-                    type_attr = await input_field.get_attribute("type") or "text"
-                    name_attr = await input_field.get_attribute("name") or ""
-                    placeholder = await input_field.get_attribute("placeholder") or ""
+
+                    text_content = (await element.text_content() or "").strip()
+                    class_name = await element.get_attribute("class") or ""
+                    aria_label = await element.get_attribute("aria-label") or ""
                     
-                    # Get additional attributes
-                    class_name = await input_field.get_attribute("class") or ""
-                    aria_label = await input_field.get_attribute("aria-label") or ""
-                    
-                    # Get XPath
-                    xpath = await input_field.evaluate("el => window.getXPath(el)")
-                    
-                    # Generate unique ID
-                    unique_id = generate_unique_id(type_attr, xpath, placeholder or name_attr, class_name, aria_label)
-                    
-                    # Store element in dictionary
-                    elements_dict[unique_id] = {
-                        "element_type": type_attr,
-                        "name": name_attr,
-                        "placeholder": placeholder,
-                        "xpath": xpath,
-                        "class_name": class_name,
-                        "aria_label": aria_label
-                    }
-                    
-                    print(f"FOUND input: {unique_id} - '{placeholder or name_attr or aria_label}'")
-                    
-                except Exception as elem_err:
-                    print(f"Error processing input element: {elem_err}")
-            
-            # Process select elements
-            selects = await page.query_selector_all('select')
-            for idx, select in enumerate(selects):
-                try:
-                    if not await select.is_visible():
-                        continue
-                        
-                    name_attr = await select.get_attribute("name") or ""
-                    
-                    # Get additional attributes
-                    class_name = await select.get_attribute("class") or ""
-                    aria_label = await select.get_attribute("aria-label") or ""
-                    
-                    # Get XPath
-                    xpath = await select.evaluate("el => window.getXPath(el)")
-                    
-                    # Generate unique ID
-                    unique_id = generate_unique_id("select", xpath, name_attr, class_name, aria_label)
-                    
-                    # Store element in dictionary
-                    elements_dict[unique_id] = {
-                        "element_type": "select",
-                        "name": name_attr,
-                        "xpath": xpath,
-                        "class_name": class_name,
-                        "aria_label": aria_label
-                    }
-                    
-                    print(f"FOUND select: {unique_id} - '{name_attr or aria_label}'")
-                    
-                except Exception as elem_err:
-                    print(f"Error processing select element: {elem_err}")
-            
-            # Process checkboxes and radio buttons
-            check_inputs = await page.query_selector_all('input[type="checkbox"], input[type="radio"]')
-            for idx, check in enumerate(check_inputs):
-                try:
-                    if not await check.is_visible():
-                        continue
-                        
-                    type_attr = await check.get_attribute("type") or ""
-                    name_attr = await check.get_attribute("name") or ""
-                    
-                    # Get additional attributes
-                    class_name = await check.get_attribute("class") or ""
-                    aria_label = await check.get_attribute("aria-label") or ""
-                    
-                    # Get XPath
-                    xpath = await check.evaluate("el => window.getXPath(el)")
-                    
-                    # Generate unique ID
-                    unique_id = generate_unique_id(type_attr, xpath, name_attr, class_name, aria_label)
-                    
-                    # Store element in dictionary
-                    elements_dict[unique_id] = {
-                        "element_type": type_attr,
-                        "name": name_attr,
-                        "xpath": xpath,
-                        "class_name": class_name,
-                        "aria_label": aria_label
-                    }
-                    
-                    print(f"FOUND {type_attr}: {unique_id} - '{name_attr or aria_label}'")
-                    
-                except Exception as elem_err:
-                    print(f"Error processing checkbox/radio element: {elem_err}")
-            
-            # Process non-standard interactive elements (divs with click handlers, etc.)
-            interactive_divs = await page.query_selector_all('div[role="button"], div[role="link"], div[onclick], div[data-identifier]')
-            for idx, div in enumerate(interactive_divs):
-                try:
-                    if not await div.is_visible():
-                        continue
-                        
-                    text = await div.text_content() or ""
-                    text = text.strip()
-                    
-                    role = await div.get_attribute("role") or ""
-                    data_id = await div.get_attribute("data-identifier") or ""
-                    
-                    # Determine element type based on role
-                    element_type = "interactive"
-                    if role == "button":
+                    element_type = ""
+                    # Stores type-specific attributes like 'name', 'placeholder', 'href', 'text'
+                    specific_details = {} 
+                    # Text used for generating the unique ID (e.g., placeholder, name, actual text)
+                    id_generation_text_source = text_content 
+
+                    # Determine element type and gather specific details
+                    if tag_name == "button":
                         element_type = "button"
-                    elif role == "link":
+                        specific_details = {"text": text_content, "tag_name": tag_name}
+                    elif tag_name == "input":
+                        input_type = (await element.get_attribute("type") or "text").lower()
+                        if input_type in ["submit", "button"]:
+                            element_type = input_type
+                            value_attr = await element.get_attribute("value") or ""
+                            # For input buttons, text_content might be empty, value_attr is better
+                            displayed_text = text_content or value_attr
+                            id_generation_text_source = displayed_text
+                            specific_details = {"text": displayed_text, "tag_name": tag_name}
+                        elif input_type in ["text", "email", "password", "search", "tel", "url", "number"]:
+                            element_type = input_type
+                            name_attr = await element.get_attribute("name") or ""
+                            placeholder_attr = await element.get_attribute("placeholder") or ""
+                            id_generation_text_source = placeholder_attr or name_attr or aria_label # Fallback for ID text
+                            specific_details = {"name": name_attr, "placeholder": placeholder_attr}
+                        elif input_type in ["checkbox", "radio"]:
+                            element_type = input_type
+                            name_attr = await element.get_attribute("name") or ""
+                            id_generation_text_source = name_attr or aria_label # Fallback for ID text
+                            specific_details = {"name": name_attr}
+                        else:
+                            continue # Skip other input types not explicitly handled
+                    elif tag_name == "a":
                         element_type = "link"
+                        href_attr = await element.get_attribute("href") or ""
+                        specific_details = {"text": text_content, "href": href_attr}
+                    elif tag_name == "textarea":
+                        element_type = "textarea" 
+                        name_attr = await element.get_attribute("name") or ""
+                        placeholder_attr = await element.get_attribute("placeholder") or ""
+                        id_generation_text_source = placeholder_attr or name_attr or aria_label
+                        specific_details = {"name": name_attr, "placeholder": placeholder_attr}
+                    elif tag_name == "select":
+                        element_type = "select"
+                        name_attr = await element.get_attribute("name") or ""
+                        id_generation_text_source = name_attr or aria_label
+                        specific_details = {"name": name_attr}
+                    elif tag_name == "div":
+                        role_attr = await element.get_attribute("role") or ""
+                        onclick_attr = await element.get_attribute("onclick") # Check if onclick exists
+                        data_identifier_attr = await element.get_attribute("data-identifier") or ""
+
+                        if role_attr == "button":
+                            element_type = "button" 
+                            specific_details = {"text": text_content, "role": role_attr}
+                        elif role_attr == "link":
+                            element_type = "link" 
+                            specific_details = {"text": text_content, "role": role_attr}
+                        elif onclick_attr or data_identifier_attr: 
+                            element_type = "interactive" # General interactive div
+                            id_generation_text_source = text_content or data_identifier_attr or aria_label
+                            specific_details = {"text": text_content, "role": role_attr, "data_identifier": data_identifier_attr}
+                        else:
+                            continue 
+                    else:
+                        continue # Tag not explicitly handled
+
+                    if not element_type: 
+                        continue
+
+                    unique_id = generate_unique_id(element_type, xpath, id_generation_text_source, class_name, aria_label)
                     
-                    # Get additional attributes
-                    class_name = await div.get_attribute("class") or ""
-                    aria_label = await div.get_attribute("aria-label") or ""
+                    # Ensure unique_id is not already taken (e.g. if somehow two elements generate same ID)
+                    # This is a safeguard, usually generate_unique_id with XPath hash should be quite unique.
+                    temp_id = unique_id
+                    counter = 0
+                    while temp_id in elements_dict:
+                        counter += 1
+                        temp_id = f"{unique_id}_{counter}"
+                    unique_id = temp_id
                     
-                    # Get XPath
-                    xpath = await div.evaluate("el => window.getXPath(el)")
-                    
-                    # Generate unique ID
-                    display_text = text or data_id
-                    unique_id = generate_unique_id(element_type, xpath, display_text, class_name, aria_label)
-                    
-                    # Store element in dictionary
-                    elements_dict[unique_id] = {
+                    base_info = {
                         "element_type": element_type,
-                        "text": text,
-                        "role": role,
-                        "data_identifier": data_id,
                         "xpath": xpath,
                         "class_name": class_name,
                         "aria_label": aria_label
                     }
+                    # Add tag_name for buttons/inputs for potential compatibility or detailed info
+                    if "tag_name" not in specific_details and tag_name in ["button", "input"]:
+                         specific_details["tag_name"] = tag_name
                     
-                    print(f"FOUND {element_type}: {unique_id} - '{display_text or aria_label}'")
+                    elements_dict[unique_id] = {**base_info, **specific_details}
                     
+                    # Determine text for printing
+                    print_display_text = id_generation_text_source # Default to what ID was based on
+                    if element_type in ["button", "submit", "link"] and "text" in specific_details and specific_details["text"]:
+                        print_display_text = specific_details["text"]
+                    elif "placeholder" in specific_details and specific_details["placeholder"]:
+                         print_display_text = specific_details["placeholder"]
+                    elif "name" in specific_details and specific_details["name"]:
+                         print_display_text = specific_details["name"]
+                    
+                    print(f"FOUND {element_type}: {unique_id} - '{print_display_text or aria_label or 'no identifiable text'}'")
+
                 except Exception as elem_err:
-                    print(f"Error processing interactive div: {elem_err}")
+                    # Log error and continue with the next element
+                    print(f"DEBUG (HumanBrowser): Error processing a candidate element: {elem_err}")
+                    # To aid debugging, one might log element's outerHTML:
+                    # try:
+                    #     outer_html = await element.evaluate("el => el.outerHTML")
+                    #     print(f"DEBUG (HumanBrowser): Element HTML (snippet): {outer_html[:200]}")
+                    # except Exception: pass # Ignore if can't get outerHTML
+                    continue
             
             # Mark this URL as processed
             self._visited_urls_for_processing.add(current_url)
@@ -661,16 +576,11 @@ class HumanBrowser:
             # Save elements to cache
             self._page_elements_cache[current_url] = elements_dict
             
-            # Save HTML content and elements data to files (optional)
-            # await self._save_page_data(page, current_url, elements_dict)
-            
             print(f"INFO (HumanBrowser): Processed {len(elements_dict)} elements on page: {current_url}")
             return elements_dict
             
         except Exception as e:
-            print(f"ERROR (HumanBrowser): Error processing page content: {e}")
-            traceback.print_exc()
-            return {}
+            print(f"ERROR (HumanBrowser): Error processing page content for {current_url}: {e}")
             
     async def _wait_for_page_stability(self, page, timeout=10):
         """Wait for page to stabilize by monitoring HTML content."""
