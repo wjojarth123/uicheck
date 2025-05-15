@@ -351,39 +351,49 @@ class HumanBrowser:
         self._page_elements_cache.clear()
         
     async def detect_and_dismiss_modals(self, page):
-        """Attempt to detect and dismiss any modal dialog overlays on the page.
-        Now with a simplified approach that's less aggressive."""
+        """Attempt to detect and dismiss any modal dialog overlays on the page."""
         print("DEBUG (HumanBrowser): Checking for modal dialogs...")
         modal_detected = False
         
         try:
-            # Only look for a few specific patterns to avoid excessive clicking
-            
-            # Cookie consent - look for most common patterns
-            cookie_buttons = await page.query_selector_all('button:has-text("Accept"), button:has-text("Accept All"), button:has-text("Accept Cookies"), button:has-text("I Agree"), button:has-text("I Accept")')
-            
-            for btn in cookie_buttons:
-                if await btn.is_visible():
+            # Check for common "No thanks" buttons
+            no_thanks_elems = await page.query_selector_all('text=/no,? thanks|i understand|not now|maybe later|dismiss|continue|not interested/i')
+            for elem in no_thanks_elems:
+                if await elem.is_visible():
+                    print(f"INFO (HumanBrowser): Found 'No Thanks' type button, attempting to click...")
                     try:
-                        await btn.click()
+                        await elem.click()
+                        modal_detected = True
+                        print("INFO (HumanBrowser): Clicked 'No Thanks' type button")
+                        await asyncio.sleep(0.5)  # Brief pause after interaction
+                    except Exception as e:
+                        print(f"WARN (HumanBrowser): Failed to click 'No Thanks' button: {e}")
+
+            # Check for common close buttons (×, X, Close)
+            close_elems = await page.query_selector_all('button:has-text("×"), button:has-text("X"), button:has-text("Close"), [aria-label="Close"], [title="Close"]')
+            for elem in close_elems:
+                if await elem.is_visible():
+                    print(f"INFO (HumanBrowser): Found close button, attempting to click...")
+                    try:
+                        await elem.click()
+                        modal_detected = True
+                        print("INFO (HumanBrowser): Clicked close button")
+                        await asyncio.sleep(0.5)  # Brief pause after interaction
+                    except Exception as e:
+                        print(f"WARN (HumanBrowser): Failed to click close button: {e}")
+            
+            # Look for cookie consent buttons
+            cookie_elems = await page.query_selector_all('text=/accept cookies|accept all|agree|consent|got it/i')
+            for elem in cookie_elems:
+                if await elem.is_visible():
+                    print(f"INFO (HumanBrowser): Found cookie consent button, attempting to click...")
+                    try:
+                        await elem.click()
+                        modal_detected = True
                         print("INFO (HumanBrowser): Clicked cookie consent button")
-                        modal_detected = True
-                        return modal_detected  # Return immediately after one successful click
+                        await asyncio.sleep(0.5)  # Brief pause after interaction
                     except Exception as e:
-                        print(f"WARN (HumanBrowser): Failed to click cookie button: {e}")
-            
-            # No Thanks/Dismiss buttons - but only the most explicit ones
-            dismiss_buttons = await page.query_selector_all('button:has-text("No Thanks"), button:has-text("Dismiss"), button:has-text("Close")')
-            
-            for btn in dismiss_buttons:
-                if await btn.is_visible():
-                    try:
-                        await btn.click()
-                        print("INFO (HumanBrowser): Clicked dismiss button")
-                        modal_detected = True
-                        return modal_detected  # Return immediately after one successful click
-                    except Exception as e:
-                        print(f"WARN (HumanBrowser): Failed to click dismiss button: {e}")
+                        print(f"WARN (HumanBrowser): Failed to click cookie consent button: {e}")
                         
         except Exception as e:
             print(f"ERROR (HumanBrowser): Error while trying to dismiss modals: {e}")
@@ -405,15 +415,8 @@ class HumanBrowser:
         print(f"INFO (HumanBrowser): Processing page content: {current_url}")
         
         try:
-            # Check for and dismiss any modal dialogs, but only once per page
-            # and only if we haven't been here before
-            if current_url not in self._visited_urls_for_processing:
-                await self.detect_and_dismiss_modals(page)
-                # Only wait a short time after dismissal
-                await asyncio.sleep(0.5)
-                
-            # Wait for the page to stabilize, but with a shorter timeout
-            await self._wait_for_page_stability(page, timeout=5)
+            # Wait for the page to stabilize
+            await self._wait_for_page_stability(page)
             
             # Dictionary to store elements by ID
             elements_dict = {}
@@ -657,6 +660,9 @@ class HumanBrowser:
             
             # Save elements to cache
             self._page_elements_cache[current_url] = elements_dict
+            
+            # Save HTML content and elements data to files (optional)
+            # await self._save_page_data(page, current_url, elements_dict)
             
             print(f"INFO (HumanBrowser): Processed {len(elements_dict)} elements on page: {current_url}")
             return elements_dict
