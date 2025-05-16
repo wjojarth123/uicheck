@@ -3,7 +3,7 @@ import asyncio
 from typing import Dict, List, Optional, Tuple, Union
 import google.generativeai as genai
 from human import HumanBrowser
-from html_cleaner import clean_html_string
+import html_cleaner
 
 # Add dotenv support to load .env file
 try:
@@ -59,18 +59,19 @@ class GeminiBrowser:
         gemini_api_key: Optional[str] = None,
         gemini_model: str = "models/gemini-2.0-flash",
         max_tokens: int = 1024,
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        auto_close: bool = False
     ):
         # Set up Gemini API
         self.api_key = gemini_api_key or GEMINI_API_KEY
         if not self.api_key:
             raise ValueError("Gemini API key is required. Provide it directly or set GEMINI_API_KEY environment variable, or add it to a .env file.")
-        
+
         genai.configure(api_key=self.api_key)
-        
+
         # Print model being used
         print(f"INFO: Using Gemini model: {gemini_model}")
-        
+
         self.model = genai.GenerativeModel(
             model_name=gemini_model,
             generation_config={
@@ -78,16 +79,17 @@ class GeminiBrowser:
                 "temperature": temperature,
             }
         )
-        
+
         # Set up HumanBrowser
         self.browser = human_browser
         self._browser_owner = False
-        
+        self.auto_close = auto_close
+
         # History of interactions for context
         self.interaction_history = []
         # Cache for the last processed elements
         self._cached_elements = {}
-        
+
     async def initialize(self, start_url: Optional[str] = None) -> None:
         """Initialize the GeminiBrowser by creating a HumanBrowser instance if needed."""
         if self.browser is None:
@@ -99,34 +101,40 @@ class GeminiBrowser:
             # If browser exists but isn't launched yet
             print("INFO (GeminiBrowser): Launching existing HumanBrowser instance")
             await self.browser.launch()
-    
+
     async def close(self) -> None:
         """Close the browser if this instance owns it."""
-        if self.browser and self._browser_owner:
+        if self.browser and self._browser_owner and self.auto_close:
             await self.browser.close()
-    
+
     async def get_page_data(self) -> Dict:
         """Get the current page data including HTML and interactive elements."""
         if not self.browser:
             raise ValueError("Browser not initialized. Call initialize() first.")
-        
+
         current_page = await self.browser.get_current_page()
         if not current_page:
             raise ValueError("No active page available.")
-        
+
         # Get the raw HTML
         raw_html = await current_page.content()
         
         # Count occurrences of 'ata-unique-id' in the HTML
         
-        # Clean the HTML to reduce token count while preserving 'data-unique-id'
-        cleaned_html  = clean_html_string(raw_html)
-        data_unique_id_count = raw_html.count("data-unique-id")
-        print(f"INFO: 'data-unique-id' appears {data_unique_id_count} times in the HTML.")
+        # Clean the HTML and extract interactive elements
+        elements_dict, cleaned_html = await html_cleaner.extract_interactive_elements(raw_html)
         
-        # Elements are now retrieved via an explicit command, not automatically here
-        # Get the interactive elements on the page
-        elements = self._cached_elements.get(current_page.url, {})  # Use cached elements
+        # Count occurrences of 'interactable' in cleaned_html
+        interactable_count = cleaned_html.count("interact")
+        print(f"INFO: 'interactable' appears {interactable_count} times in cleaned_html.")
+        
+        #print(cleaned_html[:10000])  # Print the first 10000 characters of cleaned HTML for debugging
+        
+        # Cache the elements
+        self._cached_elements[current_page.url] = elements_dict
+        
+        # Log the number of interactive elements found
+        print(f"INFO: Extracted {len(elements_dict)} interactive elements.")
         
         # Get the current URL
         url = current_page.url
@@ -138,7 +146,7 @@ class GeminiBrowser:
             "url": url,
             "title": title,
             "html": cleaned_html,
-            "elements": elements
+            "elements": elements_dict
         }
     
     def _create_prompt(self, page_data: Dict, task_description: Optional[str] = None) -> str:
@@ -149,7 +157,7 @@ class GeminiBrowser:
             history_section = "Previous actions:\n"
             for action in self.interaction_history[-5:]:
                 history_section += f"- {action}\\n"
-        
+        print(page_data['html'][:1000])
         # Construct the prompt
         prompt = f"""
 You are an AI web automation assistant. Analyze the web page and determine the next action to take to achieve the given task.
@@ -161,7 +169,7 @@ Page Title: {page_data['title']}
 
 
 HTML Content (condensed, first 7000 characters):
-{page_data['html'][:7000]}...
+{page_data['html']}...
 
 {f'Task: {task_description}' if task_description else 'Determine the next action to take on this page.'}
 
@@ -173,7 +181,6 @@ Respond with a single command on a new line in one of these formats, followed by
 - TYPE element_id "text to type" (Type text into element with ID)
 - HOVER element_id (Hover over element with ID)
 - BACKBTN (Click browser back button)
-- DISMISS (Attempt to dismiss modal dialogs)
 - WAIT (Wait a short time if no action is needed)
 - DONE (Indicate the task is complete)
 
@@ -395,17 +402,17 @@ async def main():
     # Initialize GeminiBrowser
     try:
         print("Initializing GeminiBrowser...")
-        gemini_browser = GeminiBrowser()
-        
+        gemini_browser = GeminiBrowser(auto_close=False)
+
         try:
             # Start the browser
             print("Starting browser...")
-            await gemini_browser.initialize("https://wayfair.com")
+            await gemini_browser.initialize("https://everfi.com")
             
             # Complete a task
             print("Starting task execution...")
             results = await gemini_browser.complete_task(
-                task_description="find a french door that has a single glass panel in each door and the opening for the whole door is around 59 inches wide and 80 inches tall", 
+                task_description="login with google as a student.", 
                 max_steps=15,  # Increased from 5 to 15
                 wait_time=2.0  # Increased wait time between actions
             )

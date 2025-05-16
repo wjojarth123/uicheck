@@ -8,68 +8,11 @@ import sys
 import traceback
 import argparse
 from playwright.async_api import async_playwright, TimeoutError, Page
-from html_cleaner import clean_html_string
+import html_cleaner
+import random
 from functools import partial # For event handlers with instance methods
 
 COOKIES_FILE = "cookies.json" # Define cookie file name
-GET_XPATH_SCRIPT = """ 
-function getXPath(element) {
-    if (element && element.id) {
-        return '//*[@id="' + element.id + '"]';
-    }
-    const paths = [];
-    while (element && element.nodeType === Node.ELEMENT_NODE) {
-        let index = 0;
-        let sibling = element.previousSibling;
-        while (sibling) {
-            if (sibling.nodeType === Node.ELEMENT_NODE && sibling.nodeName === element.nodeName) {
-                index++;
-            }
-            sibling = sibling.previousSibling;
-        }
-        const tagName = element.nodeName.toLowerCase();
-        const pathIndex = '[' + (index + 1) + ']';
-        paths.unshift(tagName + pathIndex);
-        element = element.parentNode;
-    }
-    return paths.length ? '/' + paths.join('/') : '';
-}
-window.getXPath = getXPath;
-"""
-
-def generate_unique_id(element_type, xpath, text="", class_name="", aria_label=""):
-    type_prefix = ""
-    if element_type in ["button", "submit"]:
-        type_prefix = "bt"
-    elif element_type in ["text", "email", "password", "search", "tel", "url", "number", "textarea"]:
-        type_prefix = "in"
-    elif element_type == "select":
-        type_prefix = "sl"
-    elif element_type == "link":
-        type_prefix = "lk"
-    elif element_type == "checkbox":
-        type_prefix = "cb"
-    elif element_type == "radio":
-        type_prefix = "rd"
-    else:
-        type_prefix = element_type[:2].lower() if len(element_type) >= 2 else (element_type + "x").lower()
-    
-    middle_part_source = ""
-    if text and text.strip():
-        middle_part_source = text.strip()
-    elif class_name and class_name.strip():
-        middle_part_source = class_name.strip().split()[0]
-    elif aria_label and aria_label.strip():
-        middle_part_source = aria_label.strip()
-    
-    if middle_part_source:
-        middle_part = ''.join(filter(str.isalnum, middle_part_source))[:3]
-    else:
-        middle_part = ''.join(random.choices(string.ascii_lowercase, k=3))
-    
-    middle_part = middle_part.lower().ljust(3, 'x')[:3]
-    xpath_hash_suffix = hashlib.sha256(xpath.encode()).hexdigest()[:3]
-    return f"{type_prefix}{middle_part}{xpath_hash_suffix}"
 
 class HumanBrowser:
     """
@@ -273,10 +216,11 @@ class HumanBrowser:
         if initial_page_obj.url and initial_page_obj.url not in self._page_urls and initial_page_obj.url != "about:blank":
              self._page_urls.add(initial_page_obj.url)
         
+        # Add the XPath script
         try:
             await initial_page_obj.add_init_script(GET_XPATH_SCRIPT)
-        except Exception as e_init_script:
-             print(f"WARN (HumanBrowser): Failed to add init script to initial page {initial_page_obj.url}: {e_init_script}")
+        except Exception as e:
+            print(f"WARN (HumanBrowser): Failed to add XPath script to new page: {e}")
 
         # Set up page load handler for the initial page
         print("WILLIAM")
@@ -386,20 +330,6 @@ class HumanBrowser:
                         await asyncio.sleep(0.5)  # Brief pause after interaction
                     except Exception as e:
                         print(f"WARN (HumanBrowser): Failed to click close button: {e}")
-            
-            # Look for cookie consent buttons
-            cookie_elems = await page.query_selector_all('text=/accept cookies|accept all|agree|consent|got it/i')
-            for elem in cookie_elems:
-                if await elem.is_visible():
-                    print(f"INFO (HumanBrowser): Found cookie consent button, attempting to click...")
-                    try:
-                        await elem.click()
-                        modal_detected = True
-                        print("INFO (HumanBrowser): Clicked cookie consent button")
-                        await asyncio.sleep(0.5)  # Brief pause after interaction
-                    except Exception as e:
-                        print(f"WARN (HumanBrowser): Failed to click cookie consent button: {e}")
-                        
         except Exception as e:
             print(f"ERROR (HumanBrowser): Error while trying to dismiss modals: {e}")
         
@@ -429,168 +359,8 @@ class HumanBrowser:
             # Wait for the page to stabilize
             await self._wait_for_page_stability(page)
 
-            elements_dict = {}
-
-            # Combined selector for all potentially interactive elements.
-            # We will filter for visibility and specific types in the Python loop.
-            combined_selector = (
-                'button, input[type="submit"], input[type="button"], input[type="text"], '
-                'input[type="email"], input[type="password"], input[type="search"], '
-                'input[type="tel"], input[type="url"], input[type="number"], '
-                'input[type="checkbox"], input[type="radio"], '
-                'textarea, select, a, '
-                'div[role="button"], div[role="link"], div[onclick], div[data-identifier]'
-            )
-
-            candidate_elements = await page.query_selector_all(combined_selector)
-
-            for element in candidate_elements:
-                try:
-                    if not await element.is_visible():
-                        continue
-
-                    # Common attributes
-                    tag_name = (await element.evaluate("el => el.tagName.toLowerCase()")).lower()
-                    xpath = await element.evaluate("el => window.getXPath(el)")
-
-                    # If XPath is somehow null or empty, skip (should be rare)
-                    if not xpath:
-                        continue
-
-                    text_content = (await element.text_content() or "").strip()
-                    class_name = await element.get_attribute("class") or ""
-                    aria_label = await element.get_attribute("aria-label") or ""
-
-                    element_type = ""
-                    # Stores type-specific attributes like 'name', 'placeholder', 'href', 'text'
-                    specific_details = {}
-                    # Text used for generating the unique ID (e.g., placeholder, name, actual text)
-                    id_generation_text_source = text_content
-
-                    # Determine element type and gather specific details
-                    if tag_name == "button":
-                        element_type = "button"
-                        specific_details = {"text": text_content, "tag_name": tag_name}
-                    elif tag_name == "input":
-                        input_type = (await element.get_attribute("type") or "text").lower()
-                        if input_type in ["submit", "button"]:
-                            element_type = input_type
-                            value_attr = await element.get_attribute("value") or ""
-                            # For input buttons, text_content might be empty, value_attr is better
-                            displayed_text = text_content or value_attr
-                            id_generation_text_source = displayed_text
-                            specific_details = {"text": displayed_text, "tag_name": tag_name}
-                        elif input_type in ["text", "email", "password", "search", "tel", "url", "number"]:
-                            element_type = input_type
-                            name_attr = await element.get_attribute("name") or ""
-                            placeholder_attr = await element.get_attribute("placeholder") or ""
-                            id_generation_text_source = placeholder_attr or name_attr or aria_label  # Fallback for ID text
-                            specific_details = {"name": name_attr, "placeholder": placeholder_attr}
-                        elif input_type in ["checkbox", "radio"]:
-                            element_type = input_type
-                            name_attr = await element.get_attribute("name") or ""
-                            id_generation_text_source = name_attr or aria_label  # Fallback for ID text
-                            specific_details = {"name": name_attr}
-                        else:
-                            continue  # Skip other input types not explicitly handled
-                    elif tag_name == "a":
-                        element_type = "link"
-                        href_attr = await element.get_attribute("href") or ""
-                        specific_details = {"text": text_content, "href": href_attr}
-                    elif tag_name == "textarea":
-                        element_type = "textarea"
-                        name_attr = await element.get_attribute("name") or ""
-                        placeholder_attr = await element.get_attribute("placeholder") or ""
-                        id_generation_text_source = placeholder_attr or name_attr or aria_label
-                        specific_details = {"name": name_attr, "placeholder": placeholder_attr}
-                    elif tag_name == "select":
-                        element_type = "select"
-                        name_attr = await element.get_attribute("name") or ""
-                        id_generation_text_source = name_attr or aria_label
-                        specific_details = {"name": name_attr}
-                    elif tag_name == "div":
-                        role_attr = await element.get_attribute("role") or ""
-                        onclick_attr = await element.get_attribute("onclick")  # Check if onclick exists
-                        data_identifier_attr = await element.get_attribute("data-identifier") or ""
-
-                        if role_attr == "button":
-                            element_type = "button"
-                            specific_details = {"text": text_content, "role": role_attr}
-                        elif role_attr == "link":
-                            element_type = "link"
-                            specific_details = {"text": text_content, "role": role_attr}
-                        elif onclick_attr or data_identifier_attr:
-                            element_type = "interactive"  # General interactive div
-                            id_generation_text_source = text_content or data_identifier_attr or aria_label
-                            specific_details = {"text": text_content, "role": role_attr, "data_identifier": data_identifier_attr}
-                        else:
-                            continue
-                    else:
-                        continue  # Tag not explicitly handled
-
-                    if not element_type:
-                        continue
-
-                    unique_id = generate_unique_id(element_type, xpath, id_generation_text_source, class_name, aria_label)
-
-                    # Ensure unique_id is not already taken (e.g. if somehow two elements generate same ID)
-                    # This is a safeguard, usually generate_unique_id with XPath hash should be quite unique.
-                    temp_id = unique_id
-                    counter = 0
-                    while temp_id in elements_dict:
-                        counter += 1
-                        temp_id = f"{unique_id}_{counter}"
-                    unique_id = temp_id
-
-                    base_info = {
-                        "element_type": element_type,
-                        "xpath": xpath,
-                        "class_name": class_name,
-                        "aria_label": aria_label
-                    }
-                    # Add tag_name for buttons/inputs for potential compatibility or detailed info
-                    if "tag_name" not in specific_details and tag_name in ["button", "input"]:
-                        specific_details["tag_name"] = tag_name
-
-                    # Add the data-interactive-id attribute to the element
-                    await element.evaluate('el => el.setAttribute("data-interactive-id", "' + unique_id + '")')
-
-                    elements_dict[unique_id] = {**base_info, **specific_details}
-
-                    # Determine text for printing
-                    print_display_text = id_generation_text_source  # Default to what ID was based on
-                    if element_type in ["button", "submit", "link"] and "text" in specific_details and specific_details["text"]:
-                        print_display_text = specific_details["text"]
-                    elif "placeholder" in specific_details and specific_details["placeholder"]:
-                        print_display_text = specific_details["placeholder"]
-                    elif "name" in specific_details and specific_details["name"]:
-                        print_display_text = specific_details["name"]
-
-                    print(f"FOUND {element_type}: {unique_id} - '{print_display_text or aria_label or 'no identifiable text'}'")
-
-                except Exception as elem_err:
-                    # Log error and continue with the next element
-                    print(f"DEBUG (HumanBrowser): Error processing a candidate element: {elem_err}")
-                    # Determine text for printing
-                    print_display_text = id_generation_text_source  # Default to what ID was based on
-                    if element_type in ["button", "submit", "link"] and "text" in specific_details and specific_details["text"]:
-                        print_display_text = specific_details["text"]
-                    elif "placeholder" in specific_details and specific_details["placeholder"]:
-                        print_display_text = specific_details["placeholder"]
-                    elif "name" in specific_details and specific_details["name"]:
-                        print_display_text = specific_details["name"]
-
-                    print(f"FOUND {element_type}: {unique_id} - '{print_display_text or aria_label or 'no identifiable text'}'")
-
-                except Exception as elem_err:
-                    # Log error and continue with the next element
-                    print(f"DEBUG (HumanBrowser): Error processing a candidate element: {elem_err}")
-                    # To aid debugging, one might log element's outerHTML:
-                    # try:
-                    #     outer_html = await element.evaluate("el => el.outerHTML")
-                    #     print(f"DEBUG (HumanBrowser): Element HTML (snippet): {outer_html[:200]}")
-                    # except Exception: pass  # Ignore if can't get outerHTML
-                    continue
+            # Call the new function in html_cleaner.py
+            elements_dict, cleaned_html = await html_cleaner.extract_interactive_elements(await page.content())
 
             # Mark this URL as processed
             self._visited_urls_for_processing.add(current_url)
