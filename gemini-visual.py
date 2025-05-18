@@ -42,7 +42,7 @@ def parse_gemini_response(response):
         "CLICK": ("click", 2),
         "TYPE": ("type", 3),
         "HOVER": ("hover", 2),
-        "SCROLL": ("scroll", 1),
+        "SCROLL": ("scroll", 3), # Updated from 1 to 3 arguments
         "GOTO_URL": ("navigate", 1),
         "DONE": ("done", 0)  # Added DONE action
     }
@@ -92,9 +92,11 @@ def execute_action(page, action, args, original_size, scaled_size):
         x, y = scale_coordinates(pixel_x_on_scaled_img, pixel_y_on_scaled_img, original_size, scaled_size)
         
         page.mouse.move(x, y)
-        page.mouse.click(x, y)
+        # Triple-click to select all text in the input field before typing
+        page.mouse.click(x, y, click_count=3) 
+        
         page.keyboard.type(args[2]) 
-        print(f"Typing '{args[2]}' at page coords ({x}, {y}) (Original Gemini decimals: {args[0]},{args[1]})")
+        print(f"Typing '{args[2]}' at page coords ({x}, {y}) (Original Gemini decimals: {args[0]},{args[1]}) after selecting existing text")
     elif action == "hover":
         dec_x, dec_y = float(args[0]), float(args[1])
         pixel_x_on_scaled_img = int(dec_x * scaled_size[0])
@@ -104,10 +106,22 @@ def execute_action(page, action, args, original_size, scaled_size):
         page.mouse.move(x, y)
         print(f"Hovering at page coords ({x}, {y}) (Original Gemini decimals: {args[0]},{args[1]})")
     elif action == "scroll":
-        page.mouse.wheel(0, int(args[0]))
-        print(f"Scrolling by {args[0]} pixels")
+        # args are: dec_x, dec_y, pages_to_scroll
+        dec_x, dec_y = float(args[0]), float(args[1])
+        pages_to_scroll = float(args[2])
+
+        pixel_x_on_scaled_img = int(dec_x * scaled_size[0])
+        pixel_y_on_scaled_img = int(dec_y * scaled_size[1])
+        
+        x, y = scale_coordinates(pixel_x_on_scaled_img, pixel_y_on_scaled_img, original_size, scaled_size)
+        
+        page.mouse.move(x, y) # Move mouse to the context location
+        
+        scroll_amount_pixels = int(pages_to_scroll * VIEWPORT_HEIGHT)
+        page.mouse.wheel(0, scroll_amount_pixels)
+        print(f"Scrolling by {pages_to_scroll} pages ({scroll_amount_pixels} pixels) at context page coords ({x}, {y})")
     elif action == "navigate":
-        page.goto(args[0].strip('"'))
+        page.goto(args[0].strip('"'), timeout=60000) # Increased timeout to 60 seconds
         print(f"Navigating to {args[0]}")
     else:
         raise ValueError(f"Unknown action: {action}")
@@ -117,23 +131,24 @@ def main(goal):
         browser = p.chromium.launch(headless=False)
         page = browser.new_page()
         page.set_viewport_size({"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT})
-        page.goto("https://homedepot.com")
+        page.goto("https://homedepot.com", timeout=60000) # Increased timeout to 60 seconds
         
         system_prompt = f"""
         You are a web automation assistant. Your goal is: {goal}
-        You will receive a screenshot of a web browser viewport (scaled to {TARGET_SHORT_DIM}px on its shortest side).
         Respond with ONE and only one action per prompt. You can execute this action using these commands:
         - CLICK X Y
         - TYPE X Y xyz
         - HOVER X Y
-        - SCROLL PIXELS
-        - GOTO_URL "URL"
+        - SCROLL X Y pages
+        - GOTO_URL url
         - DONE
         X and Y are decimal values between 0.0 and 1.0, representing the proportional coordinates in the screenshot (e.g., X=0.5, Y=0.25 means halfway across the width and a quarter way down the height).
-        Coordinates are based on the provided image. Keep responses concise.
-        If the goal is achieved or you are stuck, respond with DONE. If you dont see what you are looking for you can always choose to scroll down.
+        pages is a decimal value representing how many pages to scroll (e.g., 1 for one page down, -0.5 for half a page up).
+        If the goal is achieved or you are stuck, respond with DONE.
+        Utilize up to 4 decimal places for X and Y coordinates. It should be a precise and accurate decimal number for a perfect click.
+        Your image only shows to main screen, not the entire page. You can only see the visible part of the screen. You can scroll down to see more results and information, proving very useful when you need to see more.
         """
-
+        instructions = f""""""
         step_counter = 0
         previous_action_timed_out = False # Initialize flag
         last_action_details = None # Initialize variable to store last action
@@ -163,7 +178,7 @@ def main(goal):
                 print(f"Error deleting temp screenshot {temp_screenshot_path}: {e}")
 
             # --- 2. Build Prompt for Gemini (single image) ---
-            prompt_content = [system_prompt]
+            prompt_content = [system_prompt] + [instructions]
 
             if last_action_details:
                 action_name_for_prompt = last_action_details["action"]
@@ -202,7 +217,7 @@ def main(goal):
             last_action_details = {"action": action, "args": args}
 
             # --- 4. Annotate Screenshot (if applicable) ---
-            if action in ["click", "type", "hover"]:
+            if action in ["click", "type", "hover", "scroll"]: # Added "scroll" for potential annotation
                 try:
                     # Convert decimal strings to floats
                     dec_x_for_annotation = float(args[0])
@@ -249,7 +264,9 @@ def main(goal):
                     original_size=(VIEWPORT_WIDTH, VIEWPORT_HEIGHT),
                     scaled_size=current_scaled_size 
                 )
-                page.wait_for_load_state("networkidle", timeout=30000)
+                # Adjust wait_for_load_state timeout if navigation occurred, otherwise use default
+                load_timeout = 60000 if action == "navigate" else 10000
+                page.wait_for_load_state("networkidle", timeout=load_timeout)
             except TimeoutError as te: # Specifically catch Playwright's TimeoutError
                 print(f"Warning: Page load timeout: {te}. Continuing with the next action.")
                 previous_action_timed_out = True # Set flag if timeout occurs
@@ -263,5 +280,5 @@ def main(goal):
         # Persisted unannotated_step_*.png and annotated_step_*.png files remain in SCREENSHOT_DIR.
 
 if __name__ == "__main__":
-    user_goal = "Find me the aisle and bay of blue rust oleum spray paint at the east palo alto bayshore home depot store (zip 94303).The look up the spray paint. tell me the location of the top hit"
+    user_goal = "Imagine you are an average person. You live around palo alto, and are working on a home improvement project. Go to homedepot.com. You need some spraypaint for your project, Perhaps you might want to look at a few, selecting one that is good. YOu might want to see if its in stock near you, and where it is in the store."
     main(user_goal)
