@@ -1,0 +1,76 @@
+{
+  "/body/button": {
+    "id": "CH16f220",
+    "xpath": "/body/button",
+    "capabilities": "CH",
+    "tag": "button",
+    "attrs": {}
+  },
+  "/body/a": {
+    "id": "CHf47ba9",
+    "xpath": "/body/a",
+    "capabilities": "CH",
+    "tag": "a",
+    "attrs": {}
+  },
+  "/body/div[1]": {
+    "id": "CH69f0a8",
+    "xpath": "/body/div[1]",
+    "capabilities": "CH",
+    "tag": "div",
+    "attrs": {}
+  },
+  "/body/span": {
+    "id": "CH3d8ca3",
+    "xpath": "/body/span",
+    "capabilities": "CH",
+    "tag": "span",
+    "attrs": {}
+  },
+  "/body/form/input[1]": {
+    "id": "CT700bae",
+    "xpath": "/body/form/input[1]",
+    "capabilities": "CT",
+    "tag": "input",
+    "attrs": {}
+  },
+  "/body/form/input[2]": {
+    "id": "Cabba14",
+    "xpath": "/body/form/input[2]",
+    "capabilities": "C",
+    "tag": "input",
+    "attrs": {}
+  },
+  "/body/form/textarea": {
+    "id": "Tf4a493",
+    "xpath": "/body/form/textarea",
+    "capabilities": "T",
+    "tag": "textarea",
+    "attrs": {}
+  },
+  "/body/form/input[3]": {
+    "id": "C667e99",
+    "xpath": "/body/form/input[3]",
+    "capabilities": "C",
+    "tag": "input",
+    "attrs": {}
+  },
+  "/body/form/div": {
+    "id": "T266481",
+    "xpath": "/body/form/div",
+    "capabilities": "T",
+    "tag": "div",
+    "attrs": {}
+  },
+  "/body/div[2]": {
+    "id": "I6ba9d6",
+    "xpath": "/body/div[2]",
+    "capabilities": "I",
+    "tag": "div",
+    "attrs": {
+      "class": [
+        "complex-ui"
+      ]
+    }
+  }
+}

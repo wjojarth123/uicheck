@@ -1,0 +1,207 @@
+
+You are an AI web automation assistant. Analyze the web page HTML and determine the next action to take.
+
+URL: https://www.wikipedia.org/
+Page Title: Wikipedia
+
+Previous actions:
+- TYPE data-unique-id "inwdrc91" "pig anatomy"
+
+
+HTML Content:
+<!DOCTYPE html>
+<html class="js-enabled" lang="en"><head>
+<meta charset="utf-8"/>
+<title>Wikipedia</title>
+<meta content="Wikipedia is a free online encyclopedia, created and edited by volunteers around the world and hosted by the Wikimedia Foundation." name="description"/>
+
+<meta content="initial-scale=1,user-scalable=yes" name="viewport"/>
+<link href="/static/apple-touch/wikipedia.png" rel="apple-touch-icon"/>
+<link href="/static/favicon/wikipedia.ico" rel="shortcut icon"/>
+<link href="//creativecommons.org/licenses/by-sa/4.0/" rel="license"/>
+
+
+<link href="//upload.wikimedia.org" rel="preconnect"/>
+<link href="https://wikis.world/@wikipedia" rel="me"/>
+<meta content="" property="og:url"/>
+<meta content="Wikipedia, the free encyclopedia" property="og:title"/>
+<meta content="website" property="og:type"/>
+<meta content="Wikipedia is a free online encyclopedia, created and edited by volunteers around the world and hosted by the Wikimedia Foundation." property="og:description"/>
+<meta content="https://upload.wikimedia.org/wikipedia/en/thumb/8/80/Wikipedia-logo-v2.svg/2244px-Wikipedia-logo-v2.svg.png" property="og:image"/>
+<link href="//en.wikipedia.org" rel="preconnect"/></head>
+<body class="jsl10n-visible" id="www-wikipedia-org">
+<main>
+<div class="central-textlogo">
+<img alt="" class="central-featured-logo" height="183" src="portal/wikipedia.org/assets/img/Wikipedia-logo-v2.png" srcset="portal/wikipedia.org/assets/img/Wikipedia-logo-v2@1.5x.png 1.5x, portal/wikipedia.org/assets/img/Wikipedia-logo-v2@2x.png 2x" width="200"/>
+<h1 class="central-textlogo-wrapper">
+<span class="central-textlogo__image sprite svg-Wikipedia_wordmark">
+Wikipedia
+</span>
+<strong class="jsl10n localized-slogan" data-jsl10n="portal.slogan">The Free Encyclopedia</strong>
+</h1>
+</div>
+<nav aria-label="Top languages" class="central-featured" data-el-section="primary links" data-jsl10n="top-ten-nav-label">
+<!-- #1. en.wikipedia.org - 1,750,608,000 views/day -->
+<div class="central-featured-lang lang1" dir="ltr" lang="en">
+<a class="link-box" data-slogan="The Free Encyclopedia" data-unique-id="lkeng879" href="//en.wikipedia.org/" id="js-link-box-en" title="English — Wikipedia — The Free Encyclopedia">
+<strong>English</strong>
+<small>6,974,000+ <span>articles</span></small>
+</a>
+</div>
+<!-- #2. ja.wikipedia.org - 203,372,000 views/day -->
+<div class="central-featured-lang lang2" dir="ltr" lang="ja">
+<a class="link-box" data-slogan="フリー百科事典" data-unique-id="lk日本語92b" href="//ja.wikipedia.org/" id="js-link-box-ja" title="Nihongo — ウィキペディア — フリー百科事典">
+<strong>日本語</strong>
+<small>1,457,000+ <span>記事</span></small>
+</a>
+</div>
+<!-- #3. ru.wikipedia.org - 197,786,000 views/day -->
+<div class="central-featured-lang lang3" dir="ltr" lang="ru">
+<a class="link-box" data-slogan="Свободная энциклопедия" data-unique-id="lkрус8c1" href="//ru.wikipedia.org/" id="js-link-box-ru" title="Russkiy — Википедия — Свободная энциклопедия">
+<strong>Русский</strong>
+<small>2 036 000+ <span>статей</span></small>
+</a>
+</div>
+<!-- #4. de.wikipedia.org - 183,042,000 views/day -->
+<div class="central-featured-lang lang4" dir="ltr" lang="de">
+<a class="link-box" data-slogan="Die freie Enzyklopädie" data-unique-id="lkdeu7d6" href="//de.wikipedia.org/" id="js-link-box-de" title="Deutsch — Wikipedia — Die freie Enzyklopädie">
+<strong>Deutsch</strong>
+<small>3.001.000+ <span>Artikel</span></small>
+</a>
+</div>
+<!-- #5. es.wikipedia.org - 164,570,000 views/day -->
+<div class="central-featured-lang lang5" dir="ltr" lang="es">
+<a class="link-box" data-slogan="La enciclopedia libre" data-unique-id="lkesp07d" href="//es.wikipedia.org/" id="js-link-box-es" title="Español — Wikipedia — La enciclopedia libre">
+<strong>Español</strong>
+<small>2.021.000+ <span>artículos</span></small>
+</a>
+</div>
+<!-- #6. fr.wikipedia.org - 147,953,000 views/day -->
+<div class="central-featured-lang lang6" dir="ltr" lang="fr">
+<a class="link-box" data-slogan="L’encyclopédie libre" data-unique-id="lkfrac52" href="//fr.wikipedia.org/" id="js-link-box-fr" title="Français — Wikipédia — L’encyclopédie libre">
+<strong>Français</strong>
+<small>2 674 000+ <span>articles</span></small>
+</a>
+</div>
+<!-- #7. zh.wikipedia.org - 126,218,000 views/day -->
+<div class="central-featured-lang lang7" dir="ltr" lang="zh">
+<a class="link-box localize-variant" data-slogan="自由的百科全书 / 自由的百科全書" data-unique-id="lk中文1a1a" href="//zh.wikipedia.org/" id="js-link-box-zh" title="Zhōngwén — 维基百科 / 維基百科 — 自由的百科全书 / 自由的百科全書">
+<strong>中文</strong>
+<small>1,470,000+ <span>条目 / 條目</span></small>
+</a>
+</div>
+<!-- #8. it.wikipedia.org - 100,965,000 views/day -->
+<div class="central-featured-lang lang8" dir="ltr" lang="it">
+<a class="link-box" data-slogan="L'enciclopedia libera" data-unique-id="lkita32b" href="//it.wikipedia.org/" id="js-link-box-it" title="Italiano — Wikipedia — L'enciclopedia libera">
+<strong>Italiano</strong>
+<small>1.910.000+ <span>voci</span></small>
+</a>
+</div>
+<!-- #9. pt.wikipedia.org - 52,738,000 views/day -->
+<div class="central-featured-lang lang9" dir="ltr" lang="pt">
+<a class="link-box" data-slogan="A enciclopédia livre" data-unique-id="lkpor569" href="//pt.wikipedia.org/" id="js-link-box-pt" title="Português — Wikipédia — A enciclopédia livre">
+<strong>Português</strong>
+<small>1.146.000+ <span>artigos</span></small>
+</a>
+</div>
+<!-- #10. pl.wikipedia.org - 49,410,000 views/day -->
+<div class="central-featured-lang lang10" dir="ltr" lang="pl">
+<a class="link-box" data-slogan="Wolna encyklopedia" data-unique-id="lkpolc81" href="//pl.wikipedia.org/" id="js-link-box-pl" title="Polski — Wikipedia — Wolna encyklopedia">
+<strong>Polski</strong>
+<small>1 652 000+ <span>haseł</span></small>
+</a>
+</div>
+</nav>
+<div class="search-container" role="search">
+<form action="//www.wikipedia.org/search-redirect.php" class="pure-form" data-el-section="search" id="search-form">
+<fieldset>
+<input name="family" type="hidden" value="Wikipedia"/>
+<div class="search-input" id="search-input">
+<label class="screen-reader-text" data-jsl10n="portal.search-input-label" data-unique-id="laseaba5" for="searchInput">Search Wikipedia</label>
+<input accesskey="F" autocomplete="off" autofocus="autofocus" data-unique-id="inakx712" dir="auto" id="searchInput" name="search" size="20" style="padding-right: 64px;" type="search"/>
+<div class="styled-select js-enabled">
+<div class="hide-arrow">
+<label class="js-langpicker-label" data-unique-id="laenxb0a" for="searchLanguage" id="jsLangLabel">en</label><select data-unique-id="sllan3e3" id="searchLanguage" name="language">
+<option lang="af" value="af">Afrikaans</option>
+<option lang="ar" value="ar">العربية</option><!-- Al-ʿArabīyah -->
+<option lang="ast" value="ast">Asturianu</option>
+<option lang="az" value="az">Azərbaycanca</option>
+<option lang="bg" value="bg">Български</option><!-- Bǎlgarski -->
+<option lang="nan" value="nan">閩南語 / Bân-lâm-gú</option><!-- Bân-lâm-gú -->
+<option lang="bn" value="bn">বাংলা</option><!-- Bangla -->
+<option lang="be" value="be">Беларуская</option><!-- Belaruskaya -->
+<option lang="ca" value="ca">Català</option>
+<option lang="cs" value="cs">Čeština</option>
+<option lang="cy" value="cy">Cymraeg</option>
+<option lang="da" value="da">Dansk</option>
+<option lang="de" value="de">Deutsch</option>
+<option lang="et" value="et">Eesti</option>
+<option lang="el" value="el">Ελληνικά</option><!-- Ellīniká -->
+<option lang="en" selected="selected" value="en">English</option><!-- English -->
+<option lang="es" value="es">Español</option>
+<option lang="eo" value="eo">Esperanto</option>
+<option lang="eu" value="eu">Euskara</option>
+<option lang="fa" value="fa">فارسی</option><!-- Fārsi -->
+<option lang="fr" value="fr">Français</option>
+<option lang="gl" value="gl">Galego</option><!-- Galego -->
+<option lang="ko" value="ko">한국어</option><!-- Hangugeo -->
+<option lang="hy" value="hy">Հայերեն</option><!-- Hayeren -->
+<option lang="hi" value="hi">हिन्दी</option><!-- Hindī -->
+<option lang="hr" value="hr">Hrvatski</option>
+<option lang="id" value="id">Bahasa Indonesia</option>
+<option lang="it" value="it">Italiano</option>
+<option lang="he" value="he">עברית</option><!-- Ivrit -->
+<option lang="ka" value="ka">ქართული</option><!-- Kartuli -->
+<option lang="lld" value="lld">Ladin</option>
+<option lang="la" value="la">Latina</option>
+<option lang="lv" value="lv">Latviešu</option>
+<option lang="lt" value="lt">Lietuvių</option>
+<option lang="hu" value="hu">Magyar</option>
+<option lang="mk" value="mk">Македонски</option><!-- Makedonski -->
+<option lang="arz" value="arz">مصرى</option><!-- Maṣrī -->
+<option lang="ms" value="ms">Bahasa Melayu</option><!-- Bahasa Melayu -->
+<option lang="min" value="min">Bahaso Minangkabau</option>
+<option lang="my" value="my">မြန်မာဘာသာ</option><!-- Myanmarsar -->
+<option lang="nl" value="nl">Nederlands</option>
+<option lang="ja" value="ja">日本語</option><!-- Nihongo -->
+<option lang="nb" value="no">Norsk (bokmål)</option>
+<option lang="nn" value="nn">Norsk (nynorsk)</option>
+<option lang="ce" value="ce">Нохчийн</option><!-- Noxçiyn -->
+<option lang="uz" value="uz">Oʻzbekcha / Ўзбекча</option>
+<option lang="pl" value="pl">Polski</option>
+<option lang="pt" value="pt">Português</option>
+<option lang="kk" value="kk">Қазақша / Qazaqşa / قازاقشا</option>
+<option lang="ro" value="ro">Română</option>
+<option lang="sq" value="sq">Shqip</option>
+<option lang="en" value="simple">Simple English</option>
+<option lang="ceb" value="ceb">Sinugboanong Binisaya</option>
+<option lang="sk" value="sk">Slovenčina</option>
+<option lang="sl" value="sl">Slovenščina</option><!-- Slovenščina -->
+<option lang="sr" value="sr">Српски / Srpski</option>
+<option lang="sh" value="sh">Srpskohrvatski / Српскохрватски</option>
+<option lang="fi" value="fi">Suomi</option>
+<option lang="sv" value="sv">Svenska</option>
+<option lang="ta" value="ta">தமிழ்</option><!-- Tamiḻ -->
+<option lang="tt" value="tt">Татарча / Tatarça</option>
+<option lang="te" value="te">తెలుగు</option><!-- Telugu -->
+<option lang="th" value="th">...
+
+Task: Learn about pig anatomy, disection, and the heimlich manouver
+
+IMPORTANT: All interactive elements (buttons, links, inputs, etc.) have been assigned a "data-unique-id" attribute. 
+Look for these data-unique-id values in the HTML and use ONLY those exact values in your commands.
+
+First, identify the data-unique-id values of relevant elements. For example:
+- Search box: data-unique-id="insea123"
+- Submit button: data-unique-id="btsub456"
+
+Then respond with a single action in one of these formats:
+- CLICK data-unique-id (use the exact data-unique-id value found in the HTML)
+- TYPE data-unique-id "text to type" (use the exact data-unique-id value found in the HTML)
+- HOVER data-unique-id (use the exact data-unique-id value found in the HTML)
+- BACKBTN
+- DISMISS
+- GOTO url
+- WAIT (if no action is needed at this time)
+
+Your response must be in that format and only that format. Do not make up or hallucinate data-unique-id values.

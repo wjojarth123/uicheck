@@ -1,0 +1,1 @@
+TYPE inqxx677 "weather"

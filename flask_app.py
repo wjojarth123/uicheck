@@ -14,7 +14,7 @@ app = Flask(__name__)
 # Configuration
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 TEMP_FOLDER = tempfile.gettempdir()  # Use system temp folder
-MODEL_PATH = 'weights/icon_detect/model.pt'  # Path to the model
+MODEL_PATH = 'OmniParser/weights/icon_detect/model.pt'  # Path to the model
 ALIGNMENT_TOLERANCE = 50  # Default alignment tolerance
 
 # Function to load and return YOLO model
