@@ -1,142 +1,102 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from PIL import Image, ImageTk
-import cv2
-import numpy as np
 from paddleocr import PaddleOCR
+import numpy as np
+import cv2
+import os
 
-# Initialize the PaddleOCR with English language by default
-# You can change it to a different language if needed
-ocr = PaddleOCR(use_textline_orientation=True, lang='en')  # Changed use_angle_cls to use_textline_orientation
+# Configuration
+OCR_CONFIDENCE_THRESHOLD = 0.85
 
-class OCRApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("OCR Image Viewer")
+# Initialize OCR
+ocr = PaddleOCR(
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+    use_textline_orientation=False
+)
 
-        self.canvas = tk.Canvas(root, width=800, height=600)
-        self.canvas.pack()
+img_path = "OmniParser/pls_backup.png"
 
-        self.btn = tk.Button(root, text="Load Image", command=self.load_image)
-        self.btn.pack()
+# Check if image exists
+if not os.path.exists(img_path):
+    print(f"Error: Image file not found at {img_path}")
+    exit()
 
-        self.text_display = tk.Text(root, height=10, width=80)
-        self.text_display.pack(pady=10)
+# Load the image for OpenCV processing
+img = cv2.imread(img_path)
+if img is None:
+    print(f"Error: Could not load image from {img_path}")
+    exit()
 
-        self.tk_img = None
+print(f"Processing image: {img_path}")
+print(f"Image dimensions: {img.shape[1]}x{img.shape[0]}")
 
-    def load_image(self):
-        filepath = filedialog.askopenfilename(
-            filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp")]
-        )
-        if not filepath:
-            return
+# Convert to grayscale for edge detection
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        image = cv2.imread(filepath)
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)        # Run OCR with PaddleOCR
-        result = ocr.predict(image) # Changed from ocr.ocr and removed cls=True
-        
-        # Create a copy of the original image for drawing boxes
-        image_with_boxes = image_rgb.copy()
-        
-        # Clear previous text
-        self.text_display.delete('1.0', tk.END)
-        
-        ocr_processed_successfully = False
-        
-        # Determine lines_data and handle structural issues with 'result'
-        lines_data = None
-        valid_result_structure_for_processing = False
+# Perform Canny edge detection
+edges = cv2.Canny(gray, 20, 100)
 
-        if result is None:
-            self.text_display.insert(tk.END, "OCR Error: No result from predict() (result is None).\\n")
-        elif not isinstance(result, list) or not result: # not a list or empty list
-            self.text_display.insert(tk.END, f"OCR Error: Unexpected result format. Expected a non-empty list from predict(). Got type: {type(result)}.\\n")
-        else:
-            # result is a non-empty list. result[0] should contain the output for the first image.
-            first_image_output = result[0]
+try:
+    result = ocr.predict(img_path)
+    np.set_printoptions(threshold=10000)
 
-            # Check if first_image_output is an object with a .data attribute (e.g., paddlex.OCRResult)
-            if hasattr(first_image_output, 'data'):
-                if isinstance(first_image_output.data, list):
-                    lines_data = first_image_output.data
-                    valid_result_structure_for_processing = True
-                    # self.text_display.insert(tk.END, "Info: Used .data attribute (list) from OCRResult object.\\n")
-                elif first_image_output.data is None: # Handle if .data is None (e.g., no text detected)
-                    lines_data = [] # Treat as no lines detected
-                    valid_result_structure_for_processing = True
-                    # self.text_display.insert(tk.END, "Info: Used .data attribute (None) from OCRResult, treating as no lines.\\n")
-                else:
-                    # .data exists but is not a list and not None. This is unexpected.
-                    self.text_display.insert(tk.END, f"OCR Error: result[0].data is of type '{type(first_image_output.data).__name__}'. Expected a list or None.\\n")
-            elif isinstance(first_image_output, list): # Fallback: first_image_output is directly the list of lines
-                lines_data = first_image_output
-                valid_result_structure_for_processing = True
-                # self.text_display.insert(tk.END, "Info: Used result[0] as list of lines directly.\\n") # Optional debug
-            else:
-                self.text_display.insert(tk.END, f"OCR Error: result[0] is of type '{type(first_image_output).__name__}'. Expected it to be a list of lines, or an object with a '.data' attribute that is a list of lines.\\n")
-                # For debugging, attempt to list attributes of this unexpected object type
-                if not isinstance(first_image_output, (dict, str, int, float, bool, type(None))):
-                    try:
-                        self.text_display.insert(tk.END, f"Attributes of result[0]: {dir(first_image_output)}\\n")
-                    except Exception as e:
-                        self.text_display.insert(tk.END, f"Could not list attributes of result[0]: {e}\\n")
-        
-        if valid_result_structure_for_processing:
-            if lines_data: # If lines_data is a non-empty list
-                for line_info in lines_data:
-                    if not line_info or len(line_info) < 2:
-                        # Ensure line_info has at least box and text_part
-                        continue
+    # Create a mask to remove text areas
+    mask = np.zeros_like(edges)
 
-                    box_coords = line_info[0] # These are the points for the polygon
-                    text_part = line_info[1]  # This can be (text, score) or just text string
+    print("\n--- OCR Results ---")
+    text_boxes_found = 0
 
-                    # Validate box_coords structure before attempting conversion
-                    if not isinstance(box_coords, list) or not box_coords or not all(
-                        isinstance(point, (list, tuple)) and len(point) == 2 and
-                        all(isinstance(coord, (int, float)) for coord in point)
-                        for point in box_coords
-                    ):
-                        # Optionally, log this error or print a warning
-                        # print(f"Skipping malformed box_coords: {box_coords}")
-                        continue # Skip this line_info if box_coords is not a list of coordinate pairs
+    for poly, text, score in zip(result[0]['rec_polys'], result[0]['rec_texts'], result[0]['rec_scores']):
+        if score > OCR_CONFIDENCE_THRESHOLD:
+            text_boxes_found += 1
+            print(f"Text: '{text}', Score: {score:.3f}")
+            print(f"Bounding box: {poly}")
 
-                    text_content = ""
-                    if isinstance(text_part, tuple) and len(text_part) >= 1:
-                        text_content = text_part[0] # Get text from (text, score)
-                    elif isinstance(text_part, str):
-                        text_content = text_part # text_part is already the text string
-                    else:
-                        text_content = "[err_fmt]" # Placeholder for unrecognized format
+            # Get bounding box coordinates
+            poly_np = np.array(poly)
+            x_coords = poly_np[:, 0]
+            y_coords = poly_np[:, 1]
 
-                    # Convert box_coords to required format for drawing
-                    poly_points = np.array(box_coords).astype(np.int32).reshape(-1, 2)
-                    
-                    # Draw the bounding box
-                    cv2.polylines(image_with_boxes, [poly_points], True, (0, 255, 0), 2)
-                    # Add text above the box
-                    if poly_points.size > 0: # Ensure poly_points is not empty
-                        cv2.putText(image_with_boxes, text_content, (int(poly_points[0][0]), int(poly_points[0][1] - 10)), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                    # Add to text display
-                    self.text_display.insert(tk.END, text_content + " ")
-                    ocr_processed_successfully = True # Set flag if at least one box is drawn
+            x_min = int(np.min(x_coords))
+            y_min = int(np.min(y_coords))
+            x_max = int(np.max(x_coords))
+            y_max = int(np.max(y_coords))
 
-                if not ocr_processed_successfully and lines_data: # Loop ran over non-empty lines_data, but no lines were successfully processed
-                    self.text_display.insert(tk.END, "Text detected, but all lines failed internal validation for drawing.\\n")
-            else: # lines_data is an empty list (valid structure, but no text found)
-                self.text_display.insert(tk.END, "No text detected by OCR (empty list of lines).\\n")
-        # If valid_result_structure_for_processing is False, an error message about the structure was already printed.
-                    
-        image_pil = Image.fromarray(image_with_boxes) # Use a different variable name
+            # Expand the bounding box by a 4px margin
+            margin = 4
+            x_min_margin = max(0, x_min - margin)
+            y_min_margin = max(0, y_min - margin)
+            x_max_margin = min(img.shape[1], x_max + margin)
+            y_max_margin = min(img.shape[0], y_max + margin)
 
-        # Resize to fit canvas
-        image_pil.thumbnail((800, 600))
-        self.tk_img = ImageTk.PhotoImage(image_pil)
-        self.canvas.create_image(0, 0, anchor='nw', image=self.tk_img)
+            # Fill the mask within the expanded bounding box
+            cv2.rectangle(mask, (x_min_margin, y_min_margin), (x_max_margin, y_max_margin), 255, -1)
 
-# Run the app
-root = tk.Tk()
-app = OCRApp(root)
-root.mainloop()
+    print(f"\nTotal high-confidence text boxes found: {text_boxes_found}")
+
+    # Invert the mask so that the areas *inside* the bounding boxes are black (0)
+    # and areas *outside* are white (255)
+    inverted_mask = cv2.bitwise_not(mask)
+
+    # Apply the inverted mask to the edges
+    # This will keep only the edges that are *outside* the bounding boxes
+    edges_without_text = cv2.bitwise_and(edges, inverted_mask)
+
+    # Export the cleaned edge detection image
+    output_path = "edges_without_text_boxes.png"
+    cv2.imwrite(output_path, edges_without_text)
+    print(f"\nCleaned edge detection image saved to: {output_path}")
+
+    # Optional: Save original edges for comparison
+    original_edges_path = "original_edges.png"
+    cv2.imwrite(original_edges_path, edges)
+    print(f"Original edges saved to: {original_edges_path}")
+
+    # Display the results
+    print("\nDisplaying results... Press any key to close windows.")
+    cv2.imshow("Edges Without Text", edges_without_text)
+    cv2.imshow("Original Edges", edges)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+except Exception as e:
+    print(f"Error during OCR processing: {e}")
