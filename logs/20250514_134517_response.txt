@@ -1,3 +1,0 @@
-The previous action was to type "pig anatomy" into the search box. Now, click the search button to submit the query. Since there's no explicit search button with a data-unique-id, I will assume the search is triggered automatically or by pressing Enter. Therefore, the next action is to wait for the search results page to load.
-
-WAIT

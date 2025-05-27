@@ -1,3 +1,0 @@
-The previous action already typed the search query. Now, I need to submit the search. There is no submit button visible in the HTML. It seems like pressing enter after typing in the search box will submit the form. Therefore, no action is needed.
-
-WAIT
