@@ -8,7 +8,8 @@ Full replacement for client_endpoint.py – original functionality +:
 
 # ─────────────────────────────────────  Imports
 from flask import Flask, jsonify, request
-import asyncio, threading, uuid, os, time, base64, hashlib, io
+from flask_cors import CORS # ADDED: Import CORS
+import asyncio, threading, uuid, os, time, base64, hashlib, io, json
 import networkx as nx
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -33,6 +34,7 @@ from alignment_processor import get_alignment_score
 
 # ─────────────────────────────────────  Flask
 app = Flask(__name__)
+CORS(app) # ADDED: Enable CORS for the entire app, or be more specific below
 load_dotenv()
 initialize_neural_model()               # Gemma once at start
 
@@ -60,7 +62,11 @@ sitemap_graph    = nx.DiGraph()
 agent_running    = False
 click_heat_sum   = 0.0
 click_count      = 0
-page_click_index = {}                       # url → how many clicks already read
+
+# Global click tracking system
+global_click_buffer = []                    # [{url, x, y, ts, processed}, ...]
+global_click_lock = threading.Lock()
+last_processed_url = ""
 
 # ─────────────────────────────────────  Maths helpers
 from math import exp
@@ -113,56 +119,136 @@ def render_heatmap(grid: int = 256, sigma: float = 60) -> str:
     plt.close(fig)
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 # ─────────────────────────  helper to locate Playwright Page
-def _resolve_active_page(agent_obj):
-    """Return the best-guess playwright.page or None."""
+async def _resolve_active_page(agent_obj):  # MODIFIED: Made async
+    """Return the best-guess playwright.page or None, preferring focused and ready pages."""
+
+    async def check_focus_and_ready(p_to_check):
+        if p_to_check and hasattr(p_to_check, 'is_closed') and not p_to_check.is_closed():
+            try:
+                if hasattr(p_to_check, 'evaluate') and callable(p_to_check.evaluate):
+                    # Check if the page has focus and is ready
+                    has_focus = await p_to_check.evaluate("document.hasFocus()")
+                    ready_state = await p_to_check.evaluate("document.readyState")
+                    if has_focus and ready_state in ["complete", "interactive"]:
+                        return True
+            except Exception:
+                pass
+        return False
+
     # 1) explicit .page we passed to Agent
-    if getattr(agent_obj, "page", None):
-        return agent_obj.page
+    # This is often the most reliable, check it first for focus.
+    explicit_agent_page = getattr(agent_obj, "page", None)
+    if await check_focus_and_ready(explicit_agent_page): # No need to check explicit_agent_page itself, check_focus does
+        return explicit_agent_page
 
     # 2) browser_session wrappers (API changed a few times)
     bs = getattr(agent_obj, "browser_session", None)
     if bs:
-        for attr in ("page", "current_page"):
-            p = getattr(bs, attr, None)
-            if p:
+        # Check direct attributes like "page" or "current_page"
+        for attr_name in ("page", "current_page"):
+            p = getattr(bs, attr_name, None)
+            if await check_focus_and_ready(p):
                 return p
-        if getattr(bs, "pages", None):
-            return bs.pages[-1]          # most recently opened tab
+        
+        bs_pages_list = getattr(bs, "pages", [])
+        if bs_pages_list:
+            for p_item in reversed(bs_pages_list): # Check most recent first
+                if await check_focus_and_ready(p_item):
+                    return p_item
 
     # 3) bare playwright context
     ctx = getattr(agent_obj, "browser_context", None)
-    if ctx and getattr(ctx, "pages", None):
-        return ctx.pages[-1]
+    if ctx:
+        ctx_pages_list = getattr(ctx, "pages", [])
+        if ctx_pages_list:
+            for p_item in reversed(ctx_pages_list): # Check most recent first
+                if await check_focus_and_ready(p_item):
+                    return p_item
 
-    # nothing worked
-    return None
+    # ---- Fallback to original-style logic if no focused page found ----
+    # (Return the first available, non-closed page in a reasonable order of preference)
+
+    if explicit_agent_page and hasattr(explicit_agent_page, 'is_closed') and not explicit_agent_page.is_closed():
+        return explicit_agent_page
+
+    if bs:
+        for attr_name in ("page", "current_page"):
+            p = getattr(bs, attr_name, None)
+            if p and hasattr(p, 'is_closed') and not p.is_closed():
+                return p
+        bs_pages_list = getattr(bs, "pages", [])
+        if bs_pages_list and len(bs_pages_list) > 0:
+            last_page_in_bs = bs_pages_list[-1]
+            if last_page_in_bs and hasattr(last_page_in_bs, 'is_closed') and not last_page_in_bs.is_closed():
+                return last_page_in_bs
+
+    if ctx:
+        ctx_pages_list = getattr(ctx, "pages", [])
+        if ctx_pages_list and len(ctx_pages_list) > 0:
+            last_page_in_ctx = ctx_pages_list[-1]
+            if last_page_in_ctx and hasattr(last_page_in_ctx, 'is_closed') and not last_page_in_ctx.is_closed():
+                return last_page_in_ctx
+            
+    return None # Nothing suitable found
 # ─────────────────────────────────────  Page recorder
 async def record_activity(agent_obj):
     """Runs after EVERY step (and from crawler) – updates global_data."""
-    global click_heat_sum, click_count
+    global click_heat_sum, click_count, last_processed_url
 
-    # ---- resolve active Playwright page --------------------------------
-         # ---- resolve active Playwright page (robust) -----------------------
-    pg = _resolve_active_page(agent_obj)
+    # ---- resolve active Playwright page (robust) -----------------------
+    pg = await _resolve_active_page(agent_obj) # MODIFIED: Added await
     if pg is None:
         print("record_activity: cannot resolve page – skipping step.")
         return
-
-
-    # ---- click harvesting  (safe if none occurred) ---------------------
-
-    all_clicks = await pg.evaluate("window._browserClicks")
-    prev = page_click_index.get(pg.url, 0)
-    new  = all_clicks[prev:]
-    page_click_index[pg.url] = len(all_clicks)
+    
+    current_url = pg.url
+    
+    # ---- Process unassigned clicks from previous page -------------------
+    unassigned_clicks = []
+    with global_click_lock:
+        for click in global_click_buffer:
+            if not click.get("processed", False):
+                # If this click happened before current URL change, assign to previous page
+                if last_processed_url and click["url"] == last_processed_url:
+                    unassigned_clicks.append(click)
+                    click["processed"] = True
+    
+    # Apply unassigned clicks to the previous page in global_data
+    if unassigned_clicks and last_processed_url:
+        with data_lock:
+            for page_entry in global_data["pages"]:
+                if page_entry["url"] == last_processed_url:
+                    for click in unassigned_clicks:
+                        # Convert to our format and add heat calculation
+                        vw, vh = 1920, 1080  # Default viewport size
+                        u, v = click["x"]/vw, click["y"]/vh
+                        h = click_heat(u, v)
+                        click_record = {
+                            "x": int(click["x"]), "y": int(click["y"]), 
+                            "ts": click["ts"]/1000.0, "heat": round(h,4),
+                            "x_norm": u, "y_norm": v
+                        }
+                        page_entry.setdefault("click_positions", []).append(click_record)
+                        click_heat_sum += h
+                        click_count += 1
+                    break
+        print(f"Applied {len(unassigned_clicks)} unassigned clicks to {last_processed_url}")
+      # ---- click harvesting from global buffer (current page) -------------
+    current_page_clicks = []
+    with global_click_lock:
+        for click in global_click_buffer:
+            if not click.get("processed", False) and click["url"] == current_url:
+                current_page_clicks.append(click)
+                click["processed"] = True
 
     vwvh = pg.viewport_size or {"width": 1, "height": 1}   # property, no ()
     vw   = vwvh.get("width", 1)
     vh   = vwvh.get("height", 1)
 
     click_records = []
-    for x, y, ts in new:
-        print(f"Click at ({x}, {y}) on {pg.url} @ {ts}")
+    for click in current_page_clicks:
+        x, y, ts = click["x"], click["y"], click["ts"]
+        print(f"Click at ({x}, {y}) on {current_url} @ {ts}")
         u, v = x/vw, y/vh
         h    = click_heat(u, v)
         click_records.append({"x":int(x),"y":int(y),"ts":ts/1000.0,
@@ -178,7 +264,7 @@ async def record_activity(agent_obj):
     # ---- capture DOM / screenshot / metrics ---------------------------
     html      = await pg.content()
     screenshot_bytes = await pg.screenshot()
-    url       = pg.url
+    url       = current_url
     t_now     = time.time()
     url_hash  = hashlib.md5(url.encode()).hexdigest()
 
@@ -284,6 +370,9 @@ async def record_activity(agent_obj):
         # clear recipients (trigger push)
         global_data["recipients"] = []
 
+    # Update last processed URL for next iteration
+    last_processed_url = current_url
+
     print(f"Recorded {url}")
     if click_records:
         print(f"  +{len(click_records)} new clicks, site avg heat={site_avg:.3f}")
@@ -333,13 +422,46 @@ async def run_agent(task_description: str):
                     '--disable-blink-features=AutomationControlled',
                     '--disable-sync','--no-first-run'
                 ]
-            )
-            # ---- click listener for EVERY page / navigation  ---------------------
+            )            # ---- click listener for EVERY page / navigation  ---------------------
             await ctx.add_init_script("""
-                window._browserClicks = [];
-                document.addEventListener('click', e => {
-                    window._browserClicks.push([e.clientX, e.clientY, Date.now()]);
-                }, true);                     // 'true' = capture phase, fires on every click
+                window._globalClickCapture = function(e) {
+                    const clickData = {
+                        x: e.clientX,
+                        y: e.clientY,
+                        ts: Date.now(),
+                        url: window.location.href,
+                        processed: false
+                    };
+                    
+                    // Use synchronous XMLHttpRequest to ensure click is captured before navigation
+                    try {
+                        const xhr = new XMLHttpRequest();
+                        xhr.open('POST', 'http://localhost:5000/api/internal/click', false); // false = synchronous
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+                        xhr.send(JSON.stringify(clickData));
+                        console.log('UICHECK: Click captured synchronously');
+                    } catch (error) {
+                        console.error('UICHECK Click Sync Error:', error);
+                        
+                        // Fallback: try sendBeacon (best effort for page unload)
+                        try {
+                            if (navigator.sendBeacon) {
+                                const formData = new FormData();
+                                formData.append('data', JSON.stringify(clickData));
+                                navigator.sendBeacon('http://localhost:5000/api/internal/click', formData);
+                                console.log('UICHECK: Click sent via beacon');
+                            }
+                        } catch (beaconError) {
+                            console.error('UICHECK Beacon Error:', beaconError);
+                        }
+                    }
+                };
+                document.addEventListener('click', window._globalClickCapture, true);
+                
+                // Also capture clicks on page unload as backup
+                window.addEventListener('beforeunload', function() {
+                    console.log('UICHECK: Page unloading');
+                });
             """)
 
             pg = await ctx.new_page()
@@ -355,10 +477,13 @@ async def run_agent(task_description: str):
                 context=ctx
             )
 
-            async def step_hook(a): await record_activity(a)
+            async def step_hook(agent_obj):
+                """Delay before running record_activity."""
+                await asyncio.sleep(2)  # Introduce a 1-second delay
+                await record_activity(agent_obj)
 
             print("Running agent task…")
-            await agent.run(on_step_end=step_hook, max_steps=30)
+            await agent.run(on_step_start=step_hook, max_steps=30)
 
             print("Agent finished. Crawling remaining pages…")
             await crawl_unvisited(ctx, pg)
@@ -391,6 +516,49 @@ def serialize_graph():
     return {"nodes":nodes,"edges":edges}
 
 # ─────────────────────────────────────  API
+@app.route("/api/internal/click", methods=["POST", "OPTIONS"]) # ADDED: OPTIONS method
+# @cross_origin() # MOVED: More general CORS(app) above is often simpler for development
+def internal_click_handler():
+    """Internal endpoint to receive clicks from browser JavaScript."""
+    global global_click_buffer, global_click_lock
+
+    if request.method == "OPTIONS":
+        # Preflight request. Reply successfully:
+        response = jsonify({"status": "ok"})
+        # flask_cors should handle the necessary headers, 
+        # but you could add them manually here if needed:
+        # response.headers.add("Access-Control-Allow-Origin", "*")
+        # response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        # response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
+        return response    
+    if request.method == "POST":
+        try:
+            # Handle both regular JSON and FormData from sendBeacon
+            if request.content_type and 'application/json' in request.content_type:
+                click_data = request.get_json(force=True)
+            else:
+                # Handle FormData from navigator.sendBeacon
+                form_data = request.form.get('data')
+                if form_data:
+                    import json
+                    click_data = json.loads(form_data)
+                else:
+                    # Try to get JSON data anyway
+                    click_data = request.get_json(force=True)
+            
+            print(f"Received click: {click_data['x']}, {click_data['y']} on {click_data['url']}")
+            
+            # Ensure the lock is appropriate for the context (threading.Lock for Flask)
+            with global_click_lock: # Assuming global_click_lock is a threading.Lock
+                global_click_buffer.append(click_data)
+            return jsonify({"status": "ok"})
+        except Exception as e:
+            print(f"Error handling POST click: {e}")
+            return jsonify({"status": "error", "message": str(e)}), 500
+    
+    # Should not happen with methods=["POST", "OPTIONS"]
+    return jsonify({"status": "error", "message": "Method not allowed"}), 405
+
 @app.route("/api/connect", methods=["POST"])
 def connect():
     data = request.get_json(force=True)
