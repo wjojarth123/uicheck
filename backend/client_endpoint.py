@@ -119,77 +119,29 @@ def render_heatmap(grid: int = 256, sigma: float = 60) -> str:
     plt.close(fig)
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 # ─────────────────────────  helper to locate Playwright Page
-async def _resolve_active_page(agent_obj):  # MODIFIED: Made async
-    """Return the best-guess playwright.page or None, preferring focused and ready pages."""
-
-    async def check_focus_and_ready(p_to_check):
-        if p_to_check and hasattr(p_to_check, 'is_closed') and not p_to_check.is_closed():
-            try:
-                if hasattr(p_to_check, 'evaluate') and callable(p_to_check.evaluate):
-                    # Check if the page has focus and is ready
-                    has_focus = await p_to_check.evaluate("document.hasFocus()")
-                    ready_state = await p_to_check.evaluate("document.readyState")
-                    if has_focus and ready_state in ["complete", "interactive"]:
-                        return True
-            except Exception:
-                pass
-        return False
-
-    # 1) explicit .page we passed to Agent
-    # This is often the most reliable, check it first for focus.
-    explicit_agent_page = getattr(agent_obj, "page", None)
-    if await check_focus_and_ready(explicit_agent_page): # No need to check explicit_agent_page itself, check_focus does
-        return explicit_agent_page
-
-    # 2) browser_session wrappers (API changed a few times)
-    bs = getattr(agent_obj, "browser_session", None)
-    if bs:
-        # Check direct attributes like "page" or "current_page"
-        for attr_name in ("page", "current_page"):
-            p = getattr(bs, attr_name, None)
-            if await check_focus_and_ready(p):
-                return p
+async def _resolve_active_page(agent_obj):
+    """Return the active page using browser-use's recommended method."""
+    try:
+        # Use browser-use's recommended method for getting current page
+        if hasattr(agent_obj, 'browser_session') and agent_obj.browser_session:
+            current_page = await agent_obj.browser_session.get_current_page()
+            if current_page and not current_page.is_closed():
+                print(f"Using browser_session.get_current_page(): {current_page.url}")
+                return current_page
         
-        bs_pages_list = getattr(bs, "pages", [])
-        if bs_pages_list:
-            for p_item in reversed(bs_pages_list): # Check most recent first
-                if await check_focus_and_ready(p_item):
-                    return p_item
-
-    # 3) bare playwright context
-    ctx = getattr(agent_obj, "browser_context", None)
-    if ctx:
-        ctx_pages_list = getattr(ctx, "pages", [])
-        if ctx_pages_list:
-            for p_item in reversed(ctx_pages_list): # Check most recent first
-                if await check_focus_and_ready(p_item):
-                    return p_item
-
-    # ---- Fallback to original-style logic if no focused page found ----
-    # (Return the first available, non-closed page in a reasonable order of preference)
-
-    if explicit_agent_page and hasattr(explicit_agent_page, 'is_closed') and not explicit_agent_page.is_closed():
-        return explicit_agent_page
-
-    if bs:
-        for attr_name in ("page", "current_page"):
-            p = getattr(bs, attr_name, None)
-            if p and hasattr(p, 'is_closed') and not p.is_closed():
-                return p
-        bs_pages_list = getattr(bs, "pages", [])
-        if bs_pages_list and len(bs_pages_list) > 0:
-            last_page_in_bs = bs_pages_list[-1]
-            if last_page_in_bs and hasattr(last_page_in_bs, 'is_closed') and not last_page_in_bs.is_closed():
-                return last_page_in_bs
-
-    if ctx:
-        ctx_pages_list = getattr(ctx, "pages", [])
-        if ctx_pages_list and len(ctx_pages_list) > 0:
-            last_page_in_ctx = ctx_pages_list[-1]
-            if last_page_in_ctx and hasattr(last_page_in_ctx, 'is_closed') and not last_page_in_ctx.is_closed():
-                return last_page_in_ctx
-            
-    return None # Nothing suitable found
+        # Fallback to agent's explicit page if browser_session method fails
+        if hasattr(agent_obj, 'page') and agent_obj.page:
+            page = agent_obj.page
+            if not page.is_closed():
+                print(f"Using agent.page fallback: {page.url}")
+                return page
+        
+        print("No active page found!")
+        return None
+        
+    except Exception as e:
+        print(f"Error resolving active page: {e}")
+        return None
 # ─────────────────────────────────────  Page recorder
 async def record_activity(agent_obj):
     """Runs after EVERY step (and from crawler) – updates global_data."""
@@ -422,46 +374,63 @@ async def run_agent(task_description: str):
                     '--disable-blink-features=AutomationControlled',
                     '--disable-sync','--no-first-run'
                 ]
-            )            # ---- click listener for EVERY page / navigation  ---------------------
+            )            # ---- Expose click reporting function to JavaScript ---------------------
+            async def _report_click(source, data: dict):
+                """Handle click data from browser JavaScript directly."""
+                try:
+                    click_data = {
+                        'x': data.get('x', 0),
+                        'y': data.get('y', 0),
+                        'ts': data.get('ts', int(time.time() * 1000)),
+                        'url': data.get('url', ''),
+                        'processed': False
+                    }
+                    
+                    print(f"UICHECK: Click received via JS function: {click_data['x']}, {click_data['y']} on {click_data['url']}")
+                    
+                    with global_click_lock:
+                        global_click_buffer.append(click_data)
+                    
+                    return {"status": "ok"}
+                except Exception as e:
+                    print(f"Error handling click via JS function: {e}")
+                    return {"status": "error", "message": str(e)}
+            
+            # Expose the function to every page
+            await ctx.expose_binding("reportClick", _report_click)
+            
+            # ---- Simplified click listener for EVERY page / navigation  ---------------------
             await ctx.add_init_script("""
                 window._globalClickCapture = function(e) {
                     const clickData = {
                         x: e.clientX,
                         y: e.clientY,
                         ts: Date.now(),
-                        url: window.location.href,
-                        processed: false
+                        url: window.location.href
                     };
                     
-                    // Use synchronous XMLHttpRequest to ensure click is captured before navigation
-                    try {
-                        const xhr = new XMLHttpRequest();
-                        xhr.open('POST', 'http://localhost:5000/api/internal/click', false); // false = synchronous
-                        xhr.setRequestHeader('Content-Type', 'application/json');
-                        xhr.send(JSON.stringify(clickData));
-                        console.log('UICHECK: Click captured synchronously');
-                    } catch (error) {
-                        console.error('UICHECK Click Sync Error:', error);
-                        
-                        // Fallback: try sendBeacon (best effort for page unload)
+                    console.log('UICHECK: Click detected at', clickData.x, clickData.y, 'on', clickData.url);
+                    
+                    // Direct function call - much more reliable than HTTP requests
+                    if (window.reportClick) {
                         try {
-                            if (navigator.sendBeacon) {
-                                const formData = new FormData();
-                                formData.append('data', JSON.stringify(clickData));
-                                navigator.sendBeacon('http://localhost:5000/api/internal/click', formData);
-                                console.log('UICHECK: Click sent via beacon');
-                            }
-                        } catch (beaconError) {
-                            console.error('UICHECK Beacon Error:', beaconError);
+                            window.reportClick(clickData).then(() => {
+                                console.log('UICHECK: Click reported successfully');
+                            }).catch(err => {
+                                console.error('UICHECK: Error reporting click:', err);
+                            });
+                        } catch (error) {
+                            console.error('UICHECK: Error calling reportClick:', error);
                         }
+                    } else {
+                        console.warn('UICHECK: reportClick function not available');
                     }
                 };
-                document.addEventListener('click', window._globalClickCapture, true);
                 
-                // Also capture clicks on page unload as backup
-                window.addEventListener('beforeunload', function() {
-                    console.log('UICHECK: Page unloading');
-                });
+                // Capture all types of clicks
+                document.addEventListener('click', window._globalClickCapture, true);
+                document.addEventListener('mousedown', window._globalClickCapture, true);
+                document.addEventListener('pointerdown', window._globalClickCapture, true);
             """)
 
             pg = await ctx.new_page()
@@ -516,48 +485,9 @@ def serialize_graph():
     return {"nodes":nodes,"edges":edges}
 
 # ─────────────────────────────────────  API
-@app.route("/api/internal/click", methods=["POST", "OPTIONS"]) # ADDED: OPTIONS method
-# @cross_origin() # MOVED: More general CORS(app) above is often simpler for development
-def internal_click_handler():
-    """Internal endpoint to receive clicks from browser JavaScript."""
-    global global_click_buffer, global_click_lock
-
-    if request.method == "OPTIONS":
-        # Preflight request. Reply successfully:
-        response = jsonify({"status": "ok"})
-        # flask_cors should handle the necessary headers, 
-        # but you could add them manually here if needed:
-        # response.headers.add("Access-Control-Allow-Origin", "*")
-        # response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        # response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
-        return response    
-    if request.method == "POST":
-        try:
-            # Handle both regular JSON and FormData from sendBeacon
-            if request.content_type and 'application/json' in request.content_type:
-                click_data = request.get_json(force=True)
-            else:
-                # Handle FormData from navigator.sendBeacon
-                form_data = request.form.get('data')
-                if form_data:
-                    import json
-                    click_data = json.loads(form_data)
-                else:
-                    # Try to get JSON data anyway
-                    click_data = request.get_json(force=True)
-            
-            print(f"Received click: {click_data['x']}, {click_data['y']} on {click_data['url']}")
-            
-            # Ensure the lock is appropriate for the context (threading.Lock for Flask)
-            with global_click_lock: # Assuming global_click_lock is a threading.Lock
-                global_click_buffer.append(click_data)
-            return jsonify({"status": "ok"})
-        except Exception as e:
-            print(f"Error handling POST click: {e}")
-            return jsonify({"status": "error", "message": str(e)}), 500
-    
-    # Should not happen with methods=["POST", "OPTIONS"]
-    return jsonify({"status": "error", "message": "Method not allowed"}), 405
+# NOTE: Removed HTTP endpoints /api/internal/click and /api/internal/click-batch
+# These have been replaced with JavaScript function exposure via ctx.expose_function()
+# for more reliable click tracking that works even during page navigation and redirects.
 
 @app.route("/api/connect", methods=["POST"])
 def connect():
