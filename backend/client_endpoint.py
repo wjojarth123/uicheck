@@ -1,342 +1,429 @@
 #!/usr/bin/env python3
+"""
+Full replacement for client_endpoint.py – original functionality +:
+- click logging & heat metric
+- heat-map PNG
+- systematic crawl of unvisited pages after agent task completes
+"""
 
+# ─────────────────────────────────────  Imports
 from flask import Flask, jsonify, request
-import asyncio
-import threading
-import uuid
-import os
-import time
-import base64
+import asyncio, threading, uuid, os, time, base64, hashlib, io
 import networkx as nx
-import hashlib
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from browser_use import Agent
 from bs4 import BeautifulSoup
-from color_analysis import get_color_palette, process_page_colors, get_site_color_metrics, reset_color_analysis_globals
 from playwright.async_api import async_playwright
-from font_processor import get_page_font_score, get_site_font_scores, reset_site_font_accumulators
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")                    # headless rendering
+import matplotlib.pyplot as plt
+from types import SimpleNamespace
+from matplotlib.colors import LinearSegmentedColormap
+from scipy.ndimage import gaussian_filter   
+
+# local helpers
+from color_analysis import (process_page_colors, get_site_color_metrics,
+                            reset_color_analysis_globals)
+from font_processor import (get_page_font_score, get_site_font_scores,
+                            reset_site_font_accumulators)
 from neural_score_processor import get_neural_score, initialize_neural_model
 from alignment_processor import get_alignment_score
 
-# Initialize Flask app
+# ─────────────────────────────────────  Flask
 app = Flask(__name__)
-
-# Load environment variables (for API keys)
 load_dotenv()
-initialize_neural_model()  # Initialize the neural model once at startup
-# Removed OCR instance initialization, as it's now in font_processor.py
+initialize_neural_model()               # Gemma once at start
 
-# Global variables
+# ─────────────────────────────────────  Globals & Locks
 global_data = {
-    "status": "idle",  # Can be 'idle', 'active', 'error'
-    "current_url": "",  # The most recently visited URL
-    "latest_screenshot_data": None,  # Base64 encoded image data
-    "latest_screenshot_hash": "",  # Hash of the latest URL for frontend access
-    "latest_color_palette": {},  # Color palette of the latest screenshot
-    "latest_font_groups": {},  # Font size groups of the latest screenshot
+    "status": "idle",
+    "current_url": "",
+    "latest_screenshot_data": None,
+    "latest_screenshot_hash": "",
+    "latest_color_palette": {},
+    "latest_font_groups": {},
     "map": {"nodes": [], "edges": []},
     "sitewide_metrics": {
-        "neural": 0,
-        "font": 0,
-        "color": 0,
-        "alignment": 0
+        "neural": 0, "font": 0, "color": 0, "alignment": 0,
+        "click_heat": 0.0                    # NEW
     },
-    "pages": [],
+    "pages": [],                            # each gets click_positions list
+    "heatmap_image": "",                    # NEW
     "timestamp": time.time(),
-    "recipients": []  # List of connection IDs that have received the current data
+    "recipients": []
 }
-data_lock = threading.Lock()  # Lock for data access
-sitemap_graph = nx.DiGraph()  # Initialize graph for the sitemap
-browser_lock = threading.Lock()  # Lock for browser access
-agent_running = False  # Flag to check if agent is running
+data_lock        = threading.Lock()
+browser_lock     = threading.Lock()
+sitemap_graph    = nx.DiGraph()
+agent_running    = False
+click_heat_sum   = 0.0
+click_count      = 0
+page_click_index = {}                       # url → how many clicks already read
 
+# ─────────────────────────────────────  Maths helpers
+from math import exp
+def click_heat(u: float, v: float) -> float:
+    """Diffusion-style heat: hot at centre AND edges."""
+    r       = ((u - .5)**2 + (v - .5)**2) ** .5
+    d_edge  = min(u, v, 1-u, 1-v)
+    return 10 * max(exp(-(r / .35)**2),
+                    exp(-(d_edge / .12)**2))
+
+
+CLICK_CMAP = LinearSegmentedColormap.from_list(
+    "click_heat",
+    ["#0046ff", "#1aff4a", "#ffef00", "#ff0011"],   # B  G   Y   R
+)
+
+def render_heatmap(grid: int = 256, sigma: float = 60) -> str:
+    """
+    Return a base-64 PNG of the accumulated clicks.
+
+    grid   – resolution (NxN); higher = sharper image but a bit larger payload
+    sigma  – Gaussian blur radius in *pixels* of that grid
+    """
+    # 1) density matrix --------------------------------------------------
+    H = np.zeros((grid, grid), dtype=float)
+
+    for page in global_data["pages"]:
+        for c in page.get("click_positions", []):
+            i = int(c["y_norm"] * (grid - 1))
+            j = int(c["x_norm"] * (grid - 1))
+            if 0 <= i < grid and 0 <= j < grid:
+                H[i, j] += 1                      # add 1 hit at that cell
+
+    if not H.any():               # no clicks yet
+        return ""
+
+    # 2) smooth into blobs ----------------------------------------------
+    H = gaussian_filter(H, sigma=sigma, mode="nearest")
+
+    # 3) normalise 0…1 for colour map -----------------------------------
+    H /= H.max()
+
+    # 4) draw ------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(3, 3), dpi=100)
+    ax.imshow(H, cmap=CLICK_CMAP, origin="lower", interpolation="bilinear")
+    ax.axis("off")
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight", pad_inches=0)
+    plt.close(fig)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+# ─────────────────────────  helper to locate Playwright Page
+def _resolve_active_page(agent_obj):
+    """Return the best-guess playwright.page or None."""
+    # 1) explicit .page we passed to Agent
+    if getattr(agent_obj, "page", None):
+        return agent_obj.page
+
+    # 2) browser_session wrappers (API changed a few times)
+    bs = getattr(agent_obj, "browser_session", None)
+    if bs:
+        for attr in ("page", "current_page"):
+            p = getattr(bs, attr, None)
+            if p:
+                return p
+        if getattr(bs, "pages", None):
+            return bs.pages[-1]          # most recently opened tab
+
+    # 3) bare playwright context
+    ctx = getattr(agent_obj, "browser_context", None)
+    if ctx and getattr(ctx, "pages", None):
+        return ctx.pages[-1]
+
+    # nothing worked
+    return None
+# ─────────────────────────────────────  Page recorder
 async def record_activity(agent_obj):
-    """Hook function that captures and records agent activity at each step"""
-    global global_data
-    print('--- ON_STEP_END HOOK ---')
+    """Runs after EVERY step (and from crawler) – updates global_data."""
+    global click_heat_sum, click_count
 
-    active_page = None
-    if hasattr(agent_obj, 'browser_session') and agent_obj.browser_session and hasattr(agent_obj.browser_session, 'context') and agent_obj.browser_session.context:
-        if agent_obj.browser_session.context.pages:
-            active_page = agent_obj.browser_session.context.pages[-1]
-    elif hasattr(agent_obj, 'page') and agent_obj.page:
-        active_page = agent_obj.page
-    elif hasattr(agent_obj, 'browser_context') and agent_obj.browser_context and agent_obj.browser_context.pages:
-        active_page = agent_obj.browser_context.pages[-1]
-
-    if not active_page:
-        print("No active page found. Skipping this step.")
+    # ---- resolve active Playwright page --------------------------------
+         # ---- resolve active Playwright page (robust) -----------------------
+    pg = _resolve_active_page(agent_obj)
+    if pg is None:
+        print("record_activity: cannot resolve page – skipping step.")
         return
 
-    # Capture current page state
-    website_html = await active_page.content()
-    website_screenshot = await active_page.screenshot()
-    current_url = active_page.url
-    current_processing_timestamp = time.time()
 
-    # Generate a hash of the current URL for a unique and short filename
-    url_hash = hashlib.md5(current_url.encode('utf-8')).hexdigest()
+    # ---- click harvesting  (safe if none occurred) ---------------------
 
-    # Save HTML and screenshot
-    os.makedirs("screenshots", exist_ok=True)
-    os.makedirs("html", exist_ok=True)
-    screenshot_path = f"screenshots/{url_hash}.png"
-    html_path = f"html/{url_hash}.html"
+    all_clicks = await pg.evaluate("window._browserClicks")
+    prev = page_click_index.get(pg.url, 0)
+    new  = all_clicks[prev:]
+    page_click_index[pg.url] = len(all_clicks)
 
-    with open(html_path, "w", encoding="utf-8") as html_file:
-        html_file.write(website_html)
+    vwvh = pg.viewport_size or {"width": 1, "height": 1}   # property, no ()
+    vw   = vwvh.get("width", 1)
+    vh   = vwvh.get("height", 1)
 
-    # Save screenshot
-    await active_page.screenshot(path=screenshot_path)
-
-    # Parse HTML to extract hrefs
-    soup = BeautifulSoup(website_html, "html.parser")
-    hrefs = [a["href"] for a in soup.find_all("a", href=True)]
-
-    # Add nodes and edges to the sitemap graph
-    sitemap_graph.add_node(current_url, color="green")
-    sitemap_graph.nodes[current_url]['timestamp'] = current_processing_timestamp
-    for href in hrefs:
-        sitemap_graph.add_node(href, color="yellow")
-        sitemap_graph.add_edge(current_url, href)
-
-    # Process page metrics for all 4 metrics
-    page_color_data = process_page_colors(screenshot_path)
-    page_actual_color_score = page_color_data['page_score']
-    palette_info = page_color_data['palette_details']
-    # palette_info = get_color_palette(screenshot_path) # This is now handled by process_page_colors
-    page_font_score_data = get_page_font_score(screenshot_path) # Ensures accumulators are updated
-    page_actual_font_score = page_font_score_data['font_score']
-    neural_score = get_neural_score(screenshot_path)
-    alignment_score = get_alignment_score(screenshot_path)
-
-    # Process sitewide metrics
-    site_color_data = get_site_color_metrics()
-    site_font_data = get_site_font_scores() # No longer needs screenshots_dir
-    
-    # Calculate sitewide neural and alignment scores (average of all pages that have been scored)
-    processed_nodes_data = [data for data in sitemap_graph.nodes.values() if 'neural_score' in data]
-    
-    if processed_nodes_data:
-        sitewide_neural = sum(data.get('neural_score', 0) for data in processed_nodes_data) / len(processed_nodes_data)
-        sitewide_alignment = sum(data.get('alignment_score', 0) for data in processed_nodes_data) / len(processed_nodes_data)
+    click_records = []
+    for x, y, ts in new:
+        print(f"Click at ({x}, {y}) on {pg.url} @ {ts}")
+        u, v = x/vw, y/vh
+        h    = click_heat(u, v)
+        click_records.append({"x":int(x),"y":int(y),"ts":ts/1000.0,
+                              "heat":round(h,4),"x_norm":u,"y_norm":v})
+        click_heat_sum += h
+        click_count    += 1
+    if click_count:
+        site_avg = round((click_heat_sum / click_count), 4)
     else:
-        sitewide_neural = 0
-        sitewide_alignment = 0
-        
-    # Store metrics in graph
-    sitemap_graph.nodes[current_url].update({
-        'color_score': page_actual_color_score,
-        'palette': palette_info,
-        'font_score': page_actual_font_score,
-        'grouped_font_sizes': page_font_score_data.get('grouped_font_sizes', {}),
-        'neural_score': neural_score,
-        'alignment_score': alignment_score,
-        'screenshot_path': screenshot_path,
-        'html_path': html_path
-    })# Update global data with thread safety
-    with data_lock:
-        # Read screenshot bytes and encode to base64
-        with open(screenshot_path, 'rb') as img_file:
-            img_bytes = img_file.read()
-            img_base64 = base64.b64encode(img_bytes).decode('utf-8')
-        
-        # Update status and current URL
-        global_data["status"] = "active"
-        global_data["current_url"] = current_url
-        global_data["latest_screenshot_data"] = img_base64
-        global_data["latest_screenshot_hash"] = url_hash
-        global_data["latest_color_palette"] = palette_info
-        global_data["latest_font_groups"] = page_font_score_data.get('grouped_font_sizes', {})
-        
-        # Update map
-        global_data["map"] = serialize_graph()
-        
-        # Update sitewide metrics
-        print(f"Site font data {site_font_data}")
-        global_data["sitewide_metrics"] = {
-            "neural": sitewide_neural,
-            "font": site_font_data.get('site_font_consistency_score', 0) if isinstance(site_font_data, dict) else 0,
-            "color": site_color_data.get('site_color_score', 0) if isinstance(site_color_data, dict) else 0,
-            "alignment": sitewide_alignment
-        }
-        
-        # Find or update page in pages list
-        page_data = {
-            "url": current_url,
-            "url_hash": url_hash,
-            "timestamp": current_processing_timestamp,
-            "metrics": {
-                "neural": neural_score,
-                "font": page_actual_font_score,
-                "color": page_actual_color_score,
-                "alignment": alignment_score
-            }
-        }
-        
-        # Update or add page
-        page_found = False
-        for i, page in enumerate(global_data["pages"]):
-            if page["url"] == current_url:
-                global_data["pages"][i] = page_data
-                page_found = True
-                break
-        
-        if not page_found:
-            global_data["pages"].append(page_data)
-        
-        # Update timestamp and clear recipients
-        global_data["timestamp"] = current_processing_timestamp
-        global_data["recipients"] = []
-    
-    print(f"Updated global data for URL: {current_url}")
-    print(f"Page metrics - Neural: {neural_score:.1f}, Font: {page_actual_font_score:.1f}, Color: {page_actual_color_score:.1f}, Alignment: {alignment_score:.1f}")
+        site_avg = 0.0
+        print("No clicks recorded yet, site avg heat = 0.0")
 
-async def run_agent(task_description):
-    """Run the Browser-Use agent with the recording hook"""
+    # ---- capture DOM / screenshot / metrics ---------------------------
+    html      = await pg.content()
+    screenshot_bytes = await pg.screenshot()
+    url       = pg.url
+    t_now     = time.time()
+    url_hash  = hashlib.md5(url.encode()).hexdigest()
+
+    # Persist files
+    os.makedirs("screenshots", exist_ok=True)
+    os.makedirs("html",        exist_ok=True)
+    ss_path   = f"screenshots/{url_hash}.png"
+    html_path = f"html/{url_hash}.html"
+    with open(html_path, "w", encoding="utf-8") as f: f.write(html)
+    with open(ss_path,  "wb")                      as f: f.write(screenshot_bytes)
+
+    # Build/expand graph
+    soup  = BeautifulSoup(html, "html.parser")
+    hrefs = [a["href"] for a in soup.find_all("a", href=True)]
+    sitemap_graph.add_node(url, color="green", timestamp=t_now)
+    for h in hrefs:
+        sitemap_graph.add_node(h, color="yellow")
+        sitemap_graph.add_edge(url, h)
+
+    # Metrics
+    page_color       = process_page_colors(ss_path)
+    font_score_data  = get_page_font_score(ss_path)
+    neural_score     = get_neural_score(ss_path)
+    alignment_score  = get_alignment_score(ss_path)
+
+    # Store metrics on node
+    sitemap_graph.nodes[url].update({
+        "color_score": page_color["page_score"],
+        "palette": page_color["palette_details"],
+        "font_score": font_score_data["font_score"],
+        "grouped_font_sizes": font_score_data["grouped_font_sizes"],
+        "neural_score": neural_score,
+        "alignment_score": alignment_score,
+        "screenshot_path": ss_path,
+        "html_path": html_path,
+        "visited": True
+    })
+
+    # ---- SITE-WIDE aggregates -----------------------------------------
+    site_color = get_site_color_metrics()
+    site_font  = get_site_font_scores()
+    visited_nodes = [d for d in sitemap_graph.nodes.values() if d.get("visited")]
+    if visited_nodes:
+        site_neural    = sum(n["neural_score"]    for n in visited_nodes)/len(visited_nodes)
+        site_alignment = sum(n["alignment_score"] for n in visited_nodes)/len(visited_nodes)
+    else:
+        site_neural = site_alignment = 0
+
+    # ---- Assemble per-page dict ---------------------------------------
+    page_dict = {
+        "url": url,
+        "url_hash": url_hash,
+        "timestamp": t_now,
+        "metrics": {
+            "neural": neural_score,
+            "font":   font_score_data["font_score"],
+            "color":  page_color["page_score"],
+            "alignment": alignment_score
+        },
+        "click_positions": click_records          # NEW / may be empty
+    }
+
+    # ---- Thread-safe global update ------------------------------------
+    with data_lock:
+        # latest snapshot
+        global_data.update({
+            "status": "active",
+            "current_url": url,
+            "latest_screenshot_data": base64.b64encode(screenshot_bytes).decode(),
+            "latest_screenshot_hash": url_hash,
+            "latest_color_palette": page_color["palette_details"],
+            "latest_font_groups":   font_score_data["grouped_font_sizes"],
+            "map": serialize_graph(),
+            "timestamp": t_now
+        })
+
+        # sitewide metrics
+        global_data["sitewide_metrics"] = {
+            "neural":    site_neural,
+            "font":      site_font.get("site_font_consistency_score",0),
+            "color":     site_color.get("site_color_score",0),
+            "alignment": site_alignment,
+            "click_heat": site_avg                       # NEW
+        }
+
+        # update / append page entry
+        found = False
+        for i, p in enumerate(global_data["pages"]):
+            if p["url"] == url:
+                # merge new clicks
+                p.setdefault("click_positions", []).extend(click_records)
+                p.update(page_dict)      # refresh metrics / timestamp
+                global_data["pages"][i] = p
+                found = True
+                break
+        if not found:
+            page_dict.setdefault("click_positions", []).extend(click_records)
+            global_data["pages"].append(page_dict)
+
+        # heat-map PNG
+        global_data["heatmap_image"] = render_heatmap()
+
+        # clear recipients (trigger push)
+        global_data["recipients"] = []
+
+    print(f"Recorded {url}")
+    if click_records:
+        print(f"  +{len(click_records)} new clicks, site avg heat={site_avg:.3f}")
+
+# ─────────────────────────────────────  Post-task crawler
+async def crawl_unvisited(context, page):
+    """Visit every yellow node (unvisited) newest → oldest, scoring each."""
+    while True:
+        unvisited = [ (d["timestamp"], n)
+                      for n, d in sitemap_graph.nodes(data=True)
+                      if not d.get("visited") ]
+        if not unvisited:
+            break
+        # newest first
+        unvisited.sort(reverse=True)
+        _, url = unvisited[0]
+        try:
+            await page.goto(url, timeout=45000)
+            dummy = SimpleNamespace(page=page, browser_context=context)
+            await record_activity(dummy)
+        except Exception as e:
+            print(f"Could not crawl {url}: {e}")
+            sitemap_graph.nodes[url]["visited"] = True   # mark so we don’t loop
+
+# ─────────────────────────────────────  Agent runner
+async def run_agent(task_description: str):
     global agent_running
-    
-    # Reset accumulators at the beginning of a new agent run
     reset_site_font_accumulators()
     reset_color_analysis_globals()
 
     with browser_lock:
         if agent_running:
-            return {"status": "error", "message": "Agent already running"}
+            return
         agent_running = True
-    
+
     try:
-        async with async_playwright() as playwright:
-            # Path to the default Edge browser executable
-            edge_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+        async with async_playwright() as pw:
+            edge_exe  = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+            user_prof = r"C:\Users\HP\AppData\Local\Microsoft\Edge\User Data"
 
-            # Path to the user profile directory
-            user_data_dir = "c:\\Users\\HP\\AppData\\Local\\Microsoft\\Edge\\User Data"
-
-            # Launch Edge with the user's profile
-            context = await playwright.chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                executable_path=edge_path,
+            ctx = await pw.chromium.launch_persistent_context(
+                user_data_dir=user_prof,
+                executable_path=edge_exe,
                 headless=False,
+                viewport={'width': 1920, 'height': 1080},
                 args=[
                     '--disable-blink-features=AutomationControlled',
-                    '--disable-background-timer-throttling',
-                    '--disable-backgrounding-occluded-windows',
-                    '--disable-client-side-phishing-detection',
-                    '--disable-hang-monitor',
-                    '--disable-ipc-flooding-protection',
-                    '--disable-prompt-on-repost',
-                    '--disable-sync',
-                    '--no-first-run',
-                ],
-                viewport={'width': 1920, 'height': 1080},
+                    '--disable-sync','--no-first-run'
+                ]
             )
+            # ---- click listener for EVERY page / navigation  ---------------------
+            await ctx.add_init_script("""
+                window._browserClicks = [];
+                document.addEventListener('click', e => {
+                    window._browserClicks.push([e.clientX, e.clientY, Date.now()]);
+                }, true);                     // 'true' = capture phase, fires on every click
+            """)
 
-            page = await context.new_page()
-            await page.goto("https://everfi.com")
-            
-            # Initialize the Gemini model
-            llm = ChatGoogleGenerativeAI(model='gemini-2.0-flash-exp')
+            pg = await ctx.new_page()
 
+            await pg.goto("https://everfi.com")
 
+            llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp")
             agent = Agent(
-                task=task_description if task_description else "go to everfi.com log in as a student, using my google account 100034323@mvla.net Complete a mental health lesson, and interact with the questions there, as if you were a student. Tools like hovering or scrolling are often useful", 
+                task=(task_description or
+                      "go to everfi.com log in as a student …"),
                 llm=llm,
-                page=page,
-                context=context
+                page=pg,
+                context=ctx
             )
 
-            async def agent_step(agent_obj):
-                await record_activity(agent_obj)            # Run the agent
-            print("Starting Browser-Use agent with Gemini model")
-            await agent.run(
-                on_step_end=agent_step,
-                max_steps=30
-            )
-            
-            # Keep the browser alive for further interactions
-            print("Keeping the browser alive for further interactions.")
-            await asyncio.sleep(3600)  # Keep the browser alive for 1 hour
+            async def step_hook(a): await record_activity(a)
+
+            print("Running agent task…")
+            await agent.run(on_step_end=step_hook, max_steps=30)
+
+            print("Agent finished. Crawling remaining pages…")
+            await crawl_unvisited(ctx, pg)
+
+            print("Crawl done – keeping browser alive 1 h.")
+            await asyncio.sleep(3600)
+
     except Exception as e:
-        print(f"Error running agent: {e}")
+        print("Agent error:", e)
     finally:
         with browser_lock:
             agent_running = False
 
+# ─────────────────────────────────────  Graph serialiser
 def serialize_graph():
-    """Convert the networkx graph to a serializable format"""
-    nodes = [{"id": n, "color": sitemap_graph.nodes[n].get("color", "yellow"), 
-              "metrics": {
-                  "color": sitemap_graph.nodes[n].get("color_score", 0.0),
-                  "font": sitemap_graph.nodes[n].get("font_score", 0.0),
-                  "neural": sitemap_graph.nodes[n].get("neural_score", 0.0),
-                  "alignment": sitemap_graph.nodes[n].get("alignment_score", 0.0)
-              },
-              "grouped_font_sizes": sitemap_graph.nodes[n].get("grouped_font_sizes", {}),
-              "palette": sitemap_graph.nodes[n].get("palette", {}),
-              "timestamp": sitemap_graph.nodes[n].get("timestamp", 0)
-             }
-             for n in sitemap_graph.nodes()]
-    edges = [{"source": u, "target": v} for u, v in sitemap_graph.edges()]
-    return {"nodes": nodes, "edges": edges}
+    nodes = [{
+        "id": n,
+        "color": d.get("color","yellow"),
+        "metrics": {
+            "color": d.get("color_score",0),
+            "font":  d.get("font_score",0),
+            "neural":d.get("neural_score",0),
+            "alignment":d.get("alignment_score",0)
+        },
+        "grouped_font_sizes": d.get("grouped_font_sizes",{}),
+        "palette": d.get("palette",{}),
+        "timestamp": d.get("timestamp",0)
+    } for n,d in sitemap_graph.nodes(data=True)]
+    edges = [{"source":u,"target":v} for u,v in sitemap_graph.edges()]
+    return {"nodes":nodes,"edges":edges}
 
-# API Endpoints
-@app.route('/api/connect', methods=['POST'])
+# ─────────────────────────────────────  API
+@app.route("/api/connect", methods=["POST"])
 def connect():
-    """Initialize connection and start agent with task"""
-    data = request.get_json()
-    task = data.get('task', '')
-    
-    # Generate connection ID
-    connection_id = str(uuid.uuid4())
-    
-    # Start the agent in a separate thread if not already running
+    data = request.get_json(force=True)
+    task = data.get("task","")
+    conn_id = str(uuid.uuid4())
+
+    # spin up agent if not running
     with browser_lock:
         if not agent_running:
-            agent_thread = threading.Thread(
-                target=lambda: asyncio.run(run_agent(task))
-            )
-            agent_thread.daemon = True
-            agent_thread.start()
-    
-    return jsonify({
-        "connection_id": connection_id,
-        "status": "connected",
-        "message": "Connection established and agent started"
-    })
+            threading.Thread(
+                target=lambda: asyncio.run(run_agent(task)),
+                daemon=True
+            ).start()
 
-@app.route('/api/data/<connection_id>', methods=['GET'])
+    return jsonify({"connection_id":conn_id,"status":"connected"})
+
+@app.route("/api/data/<connection_id>", methods=["GET"])
 def get_data(connection_id):
-    """Get data for a specific connection with simplified long polling"""
-    global global_data
-    
     with data_lock:
-        # Check if this connection has already received the current data
-        if connection_id in global_data["recipients"]:
-            # Connection has current data, wait for new data (up to 60 seconds)
-            pass
-        else:
-            # Connection hasn't received current data, send it immediately
+        if connection_id not in global_data["recipients"]:
             global_data["recipients"].append(connection_id)
             return jsonify(global_data)
-    
-    # Wait for new data (up to 60 seconds)
-    timeout = 60
-    start_time = time.time()
-    
-    while time.time() - start_time < timeout:
-        time.sleep(1)  # Check every second
-        
+
+    # simple long-poll loop (≤60 s)
+    start = time.time()
+    while time.time() - start < 60:
+        time.sleep(1)
         with data_lock:
-            # Check if recipients list was cleared (new data available)
             if connection_id not in global_data["recipients"]:
                 global_data["recipients"].append(connection_id)
                 return jsonify(global_data)
-    
-    # Timeout reached, return heartbeat
-    return jsonify({"status": "waiting", "timestamp": time.time()})
+    return jsonify({"status":"waiting","timestamp":time.time()})
 
+# ─────────────────────────────────────  Main
 if __name__ == "__main__":
-    # Start the Flask app
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    app.run(host="0.0.0.0", port=5000, threaded=True)

@@ -34,11 +34,31 @@
     avg_page_score: 0, 
     avg_font_consistency_score: 0,
     neural_score: 0, 
-    alignment_score: 0 
+    alignment_score: 0,    click_heat: 0
   };
   let currentFontGroups = {}; // Added for direct font group data
   let colorSortBy = 'quality';  // 'quality' or 'colors'
-  let visualizationMode = 'palette'; // 'palette' or 'font'
+  let leftPanelMode = 'sitemap'; // 'sitemap' or 'heatmap'
+  let heatmapImage = ''; // Store the heatmap image data
+  
+  // Sorting state
+  let sortField = '';
+  let sortDirection = 'desc'; // 'asc' or 'desc'
+  
+  // Accordion state for left panel sections
+  let accordionState = {
+    screenshot: true,
+    palette: true,
+    fonts: true,
+    sitemap: true,
+    heatmap: true
+  };
+  
+  // Track changes to leftPanelMode to re-render the network when needed
+  $: if (leftPanelMode === 'sitemap') {
+    // Use setTimeout to ensure the DOM has updated
+    setTimeout(renderNetwork, 50);
+  }
   
   // Element references for D3
   let graphContainer;
@@ -52,10 +72,70 @@
     // Get site-wide color palette
     getSitePalette();
   });
-
   onDestroy(() => {
     // Cleanup code if needed
-  });  async function connectToBackend() {
+  });
+
+  function sortTable(field) {
+    if (sortField === field) {
+      sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortField = field;
+      sortDirection = 'desc';
+    }
+  }
+
+  function getSortedNodes(nodes) {
+    if (!sortField) {
+      // Default sort by neural score descending
+      return nodes.sort((a, b) => {
+        const aNeural = a.metrics?.neural || 0;
+        const bNeural = b.metrics?.neural || 0;
+        return bNeural - aNeural;
+      });
+    }
+
+    return nodes.sort((a, b) => {
+      let aValue, bValue;
+      
+      switch (sortField) {
+        case 'page':
+          aValue = a.id;
+          bValue = b.id;
+          break;
+        case 'neural':
+          aValue = a.metrics?.neural || 0;
+          bValue = b.metrics?.neural || 0;
+          break;
+        case 'heat':
+          aValue = a.click_heat || 0;
+          bValue = b.click_heat || 0;
+          break;
+        case 'color':
+          aValue = a.metrics?.color || 0;
+          bValue = b.metrics?.color || 0;
+          break;
+        case 'font':
+          aValue = a.metrics?.font || 0;
+          bValue = b.metrics?.font || 0;
+          break;
+        case 'alignment':
+          aValue = a.metrics?.alignment || 0;
+          bValue = b.metrics?.alignment || 0;
+          break;
+        default:
+          return 0;
+      }
+
+      if (typeof aValue === 'string') {
+        return sortDirection === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
+      } else {
+        return sortDirection === 'asc' ? aValue - bValue : bValue - aValue;
+      }
+    });
+  }
+
+  async function connectToBackend() {
     try {
       status = 'Connecting...';
       const response = await fetch('/api/connect', {
@@ -96,9 +176,7 @@
         
         if (data.current_url) {
           currentUrl = data.current_url;
-        }
-
-        if (data.map) {
+        }        if (data.map) {
           if (graph && graph.nodes && graph.nodes.length === data.map.nodes.length && JSON.stringify(graph.edges) === JSON.stringify(data.map.edges)) {
             // More granular update to preserve Svelte reactivity if only node data changed
             let nodesChanged = false;
@@ -116,6 +194,21 @@
           } else {
             graph = data.map;
             renderNetwork(); 
+          }
+          
+          // Update nodes with click heat data from pages
+          if (data.pages && data.pages.length > 0) {
+            const updatedNodes = graph.nodes.map(node => {
+              const pageData = data.pages.find(p => p.url === node.id);
+              if (pageData && pageData.click_positions) {
+                const avgClickHeat = pageData.click_positions.length > 0 
+                  ? pageData.click_positions.reduce((sum, click) => sum + (click.heat || 0), 0) / pageData.click_positions.length
+                  : 0;
+                return { ...node, click_heat: avgClickHeat };
+              }
+              return node;
+            });
+            graph = { ...graph, nodes: updatedNodes };
           }
           
           if (activeSection === 'metrics') {
@@ -172,17 +265,21 @@
             currentPageFontConsistencyScore = latestPage.metrics.font || 0;
           }
         }
-        
-        if (data.sitewide_metrics) {
+          if (data.sitewide_metrics) {
           sitePalette = {
             ...sitePalette, // preserve other potential fields if any
             total_images_analyzed: graph.nodes?.length || data.pages?.length || 0,
             color_score: data.sitewide_metrics.color || 0,
             avg_font_consistency_score: data.sitewide_metrics.font || 0, 
             neural_score: data.sitewide_metrics.neural || 0,
-            alignment_score: data.sitewide_metrics.alignment || 0
+            alignment_score: data.sitewide_metrics.alignment || 0,
+            click_heat: data.sitewide_metrics.click_heat || 0
           };
           console.log('Site metrics updated from data poll:', sitePalette);
+        }
+
+        if (data.heatmap_image) {
+          heatmapImage = data.heatmap_image;
         }
       }
     } catch (error) {
@@ -300,14 +397,86 @@
       }
     } catch (error) {
       console.error('Error fetching site palette:', error);
+    }  }
+  
+  // Modernize sitemap by limiting nodes to max 6 children per parent
+  function limitSitemapNodes(originalGraph) {
+    if (!originalGraph || !originalGraph.nodes || !originalGraph.edges) {
+      return originalGraph;
     }
+    
+    // Create a map of parent -> children relationships
+    const parentChildMap = new Map();
+    
+    // Initialize all nodes as potential parents
+    originalGraph.nodes.forEach(node => {
+      parentChildMap.set(node.id, []);
+    });
+    
+    // Build parent-child relationships from edges
+    originalGraph.edges.forEach(edge => {
+      const parentId = edge.source.id || edge.source;
+      const childId = edge.target.id || edge.target;
+      
+      if (parentChildMap.has(parentId)) {
+        parentChildMap.get(parentId).push(childId);
+      }
+    });
+    
+    // Limit each parent to max 6 children, keeping the highest scoring ones
+    const keptNodes = new Set();
+    const keptEdges = [];
+    
+    // Always keep all nodes that have no children or <= 6 children
+    parentChildMap.forEach((children, parentId) => {
+      keptNodes.add(parentId);
+      
+      if (children.length <= 6) {
+        // Keep all children if <= 6
+        children.forEach(childId => keptNodes.add(childId));
+        // Keep all edges for this parent
+        originalGraph.edges.forEach(edge => {
+          const edgeParent = edge.source.id || edge.source;
+          if (edgeParent === parentId) {
+            keptEdges.push(edge);
+          }
+        });
+      } else {
+        // Limit to top 6 children based on score
+        const childNodes = children
+          .map(childId => originalGraph.nodes.find(n => n.id === childId))
+          .filter(Boolean)
+          .sort((a, b) => {
+            const scoreA = (a.metrics?.color || 0) + (a.metrics?.neural || 0);
+            const scoreB = (b.metrics?.color || 0) + (b.metrics?.neural || 0);
+            return scoreB - scoreA;
+          })
+          .slice(0, 6);
+        
+        // Keep top 6 children
+        childNodes.forEach(child => keptNodes.add(child.id));
+        
+        // Keep edges only to the top 6 children
+        originalGraph.edges.forEach(edge => {
+          const edgeParent = edge.source.id || edge.source;
+          const edgeChild = edge.target.id || edge.target;
+          if (edgeParent === parentId && childNodes.some(child => child.id === edgeChild)) {
+            keptEdges.push(edge);
+          }
+        });
+      }
+    });
+    
+    // Filter nodes and edges based on what we're keeping
+    const limitedNodes = originalGraph.nodes.filter(node => keptNodes.has(node.id));
+    const limitedEdges = keptEdges;
+    
+    return {
+      nodes: limitedNodes,
+      edges: limitedEdges
+    };
   }
-  async function startAgent() {
-    // This is now handled by the connectToBackend function
-    if (!connectionId) {
-      connectToBackend();
-    }
-  }
+  
   function renderNetwork() {
     if (!graphContainer || !graph || !graph.nodes || !graph.edges) return;
     
@@ -316,29 +485,32 @@
       graphContainer.removeChild(graphContainer.firstChild);
     }
     
+    // Modernize sitemap by limiting child nodes per parent to max 6
+    const limitedGraph = limitSitemapNodes(graph);
+    
     // Prepare data for vis-network
-    const nodes = graph.nodes.map(node => ({
+    const nodes = limitedGraph.nodes.map(node => ({
       id: node.id,
       label: node.id.split('/').pop() || node.id,
-      title: `${node.id}<br>Color: ${node.metrics?.color?.toFixed(1) || 0}/10<br>Font: ${node.metrics?.font?.toFixed(1) || 0}/10<br>Neural: ${node.metrics?.neural?.toFixed(1) || 0}/10<br>Alignment: ${node.metrics?.alignment?.toFixed(1) || 0}/10`,
+      title: `${node.id}<br>Color: ${node.metrics?.color?.toFixed(1) || 0}/10<br>Font: ${node.metrics?.font?.toFixed(1) || 0}/10<br>Neural: ${node.metrics?.neural?.toFixed(1) || 0}/10<br>Alignment: ${node.metrics?.alignment?.toFixed(1) || 0}/10<br>Click Heat: ${node.click_heat?.toFixed(2) || 0}`,
       color: {
-        background: node.color || '#4dabf7',
-        border: '#1864ab',
+        background: node.color || '#f8fafc',
+        border: '#cbd5e1',
         highlight: {
-          background: '#339af0',
-          border: '#1c7ed6'
+          background: '#e2e8f0',
+          border: '#94a3b8'
         }
       },
-      font: { size: 12 },
-      size: 16 + (node.metrics?.color ? node.metrics.color * 2 : 0)
+      font: { size: 11, color: '#475569' },
+      size: 14 + (node.metrics?.color ? node.metrics.color * 1.5 : 0)
     }));
     
-    const edges = graph.edges.map(edge => ({
+    const edges = limitedGraph.edges.map(edge => ({
       from: edge.source.id || edge.source,
       to: edge.target.id || edge.target,
       arrows: 'to',
-      width: 2,
-      color: { color: '#868e96', highlight: '#495057', hover: '#495057' },
+      width: 1.5,
+      color: { color: '#cbd5e1', highlight: '#94a3b8', hover: '#94a3b8' },
       smooth: { type: 'dynamic' }
     }));
     
@@ -414,7 +586,7 @@
     // because we're using base64 data directly
     return hashUrl(url);
   }
-    // Refresh color data array for the color analysis view
+  // Refresh color data array for the color analysis view
   function refreshColorData() {
     if (!graph || !graph.nodes) return;
     
@@ -426,6 +598,7 @@
         fontScore: node.metrics.font || 0, 
         neuralScore: node.metrics.neural || 0,
         alignmentScore: node.metrics.alignment || 0,
+        clickHeat: node.click_heat || 0,
         urlHash: getUrlHash(node.id) 
       }))
       .sort((a, b) => b.colorScore - a.colorScore); 
@@ -439,6 +612,10 @@
       // Re-render the network when switching to this section
       setTimeout(renderNetwork, 100);
     }
+  }
+
+  function toggleAccordion(section) {
+    accordionState[section] = !accordionState[section];
   }
 </script>
 
@@ -471,76 +648,65 @@
       </div>
     </div>
   </div>
-{:else}
-  <!-- Main Application UI -->
+{:else}  <!-- Main Application UI -->
   <div class="dashboard-container">
-    <header>
-      <div class="logo">
-        <h1>UI Analysis Dashboard</h1>
-        <div class="status-indicator {isAgentRunning ? 'active' : ''}"></div>
+    <!-- Header Section -->
+    <header class="main-header">
+      <div class="header-content">
+        <div class="logo">
+          <h1>UI Analysis Dashboard</h1>
+          <div class="status-indicator {status === 'Connected' ? (isAgentRunning ? 'active' : 'connected') : ''}"></div>
+        </div>
+        
+        <div class="header-status">
+          <span class="status-item">Status: <span class="status-value">{isAgentRunning ? 'Active' : 'Idle'}</span></span>
+          <span class="status-item">Connection: <span class="status-value">{status}</span></span>
+          {#if currentUrl}
+            <span class="status-item">Current: <span class="status-value" title={currentUrl}>{currentUrl.split('/').pop() || currentUrl}</span></span>
+          {/if}
+        </div>
       </div>
-      
+    </header>
+    
+    <!-- Timeline Section -->
+    <div class="timeline-section">
       <div class="timeline">
         {#if timelineEvents.length > 0}
           <div class="timeline-events">
             {#each timelineEvents as event}
               <div class="timeline-event">
-                <span class="time">{event.time}</span>
-                <span class="event-url">{event.url.split('/').slice(-1)[0] || event.url}</span>
-                <div class="event-metrics">
-                  <span class="color-count" title="Color Score">{event.colorScore?.toFixed(1)}</span>
-                  <span class="font-score" title="Font Score">{event.fontScore?.toFixed(1)}</span>
+                <div class="event-content">
+                  <span class="event-time">{event.time}</span>
+                  <span class="event-url">{event.url.split('/').slice(-1)[0] || event.url}</span>
                 </div>
               </div>
             {/each}
           </div>
         {:else}
           <div class="timeline-empty">
-            Timeline will appear as the agent visits pages
+            <span class="timeline-placeholder">Timeline will appear as the agent visits pages</span>
           </div>
         {/if}
       </div>
-      
-      <div class="status-bar">
-        <span>Status: {isAgentRunning ? 'Active' : 'Idle'}</span>
-        <span>Connection: {status}</span>
-        {#if currentUrl}
-          <span class="current-url" title={currentUrl}>Current: {currentUrl.split('/').pop() || currentUrl}</span>
-        {/if}
-        <button class="refresh-button" on:click={getLatestScreenshot}>
-          Refresh Data
-        </button>
-      </div>
-    </header>
-
-    <div class="main-content">
+    </div><div class="main-content">
       <div class="left-panel">
-        <div class="screenshot-section">
-          <h3>Current Page</h3>
-          <div class="screenshot-container">
+        <!-- Screenshot Accordion Section -->        <div class="accordion-section">          <div class="accordion-header" class:expanded={accordionState.screenshot} on:click={() => toggleAccordion('screenshot')}>
+            <h3>Current Page</h3>
+            <span class="accordion-icon" class:expanded={accordionState.screenshot}>▼</span>
+          </div>          {#if accordionState.screenshot}
             {#if screenshotUrl}
-              <img src={screenshotUrl} alt="Current page screenshot" />
+              <img src={screenshotUrl} alt="Current page screenshot" style="width: calc(100% - 2rem); margin: 1rem; border-radius: 8px; border: 1px solid #e0e0e0;" />
             {:else}
               <div class="placeholder">No screenshot available yet</div>
             {/if}
-          </div>
+          {/if}
         </div>
-        
-        <!-- Visualization section between screenshot and site map -->
-        <div class="visualization-section">
-          <div class="visualization-header">
-            <h3>{visualizationMode === 'palette' ? 'Color Palette' : 'Page Font Palette'}</h3>
-            <button class="toggle-button" on:click={() => visualizationMode = visualizationMode === 'palette' ? 'font' : 'palette'}>
-              <span class="toggle-arrow">➤</span>
-              <span class="toggle-label">{visualizationMode === 'palette' ? 'Show Fonts' : 'Show Palette'}</span>
-            </button>
-          </div>
-          
-          
-          {#if visualizationMode === 'palette'}
-            <!-- Color palette visualization -->
-            <div class="palette-display">
-              {#if currentColorPalette && currentColorPalette.prominent_colors && currentColorPalette.prominent_colors.length > 0}
+          <!-- Color Palette Accordion Section -->        <div class="accordion-section">          <div class="accordion-header" class:expanded={accordionState.palette} on:click={() => toggleAccordion('palette')}>
+            <h3>Color Palette</h3>
+            <span class="accordion-icon" class:expanded={accordionState.palette}>▼</span>
+          </div>          {#if accordionState.palette}
+            {#if currentColorPalette && currentColorPalette.prominent_colors && currentColorPalette.prominent_colors.length > 0}
+              <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 1rem; margin: 1rem;">
                 {#each currentColorPalette.prominent_colors.slice(0, 6) as color}
                   <div 
                     class="color-block" 
@@ -551,30 +717,57 @@
                     <!-- <span class="color-info">{color.color}</span> -->
                   </div>
                 {/each}
-              {:else}
-                <div class="placeholder">No palette data available for current page ({currentUrl || 'N/A'})</div>
-              {/if}
-            </div>
-          {:else}
-            <!-- Font size visualization -->
-            <div class="font-size-visualization">
-              {#if currentFontGroups && Object.keys(currentFontGroups).length > 0}
+              </div>
+            {:else}
+              <div class="placeholder">No palette data available for current page ({currentUrl || 'N/A'})</div>
+            {/if}
+          {/if}
+        </div>
+          <!-- Fonts Accordion Section -->        <div class="accordion-section">          <div class="accordion-header" class:expanded={accordionState.fonts} on:click={() => toggleAccordion('fonts')}>
+            <h3>Page Font Palette</h3>
+            <span class="accordion-icon" class:expanded={accordionState.fonts}>▼</span>
+          </div>          {#if accordionState.fonts}
+            {#if currentFontGroups && Object.keys(currentFontGroups).length > 0}
+              <div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; margin: 1rem;">
                 {#each Object.entries(currentFontGroups) as [size, count]}
                   <div class="font-size-group">
                     <div class="font-size-sample" style="font-size: {Math.min(32, Math.max(10, parseInt(size)))}px">Aa</div>
                     <div class="font-size-info">{size}px ({count})</div>
                   </div>
                 {/each}
+              </div>
+            {:else}
+              <div class="placeholder">No font data available for current page ({currentUrl || 'N/A'})</div>
+            {/if}
+          {/if}
+        </div>
+          <!-- Sitemap Accordion Section -->        <div class="accordion-section">          <div class="accordion-header" class:expanded={accordionState.sitemap} on:click={() => toggleAccordion('sitemap')}>
+            <h3>Site Map</h3>
+            <span class="accordion-icon" class:expanded={accordionState.sitemap}>▼</span>
+          </div>          {#if accordionState.sitemap}
+            <div bind:this={graphContainer} style="border: 1px solid #e5e7eb; border-radius: 8px; background-color: #f9fafb; position: relative; height: 300px; overflow: hidden; margin: 1rem;"></div>
+          {/if}
+        </div>
+          <!-- Heatmap Accordion Section -->
+        <div class="accordion-section">          <div class="accordion-header" on:click={() => toggleAccordion('heatmap')}>
+            <h3>Click Heatmap</h3>
+            <span class="accordion-icon" class:expanded={accordionState.heatmap}>▼</span>
+          </div>          {#if accordionState.heatmap}
+            <div>
+              {#if heatmapImage}
+                <div class="heatmap-container-wrapper">
+                  <img src={heatmapImage} alt="Click heatmap" class="heatmap-image" />
+                  <div class="heatmap-legend">
+                    <span class="legend-label">Cold</span>
+                    <div class="legend-gradient"></div>
+                    <span class="legend-label">Hot</span>
+                  </div>
+                </div>
               {:else}
-                <div class="placeholder">No font data available for current page ({currentUrl || 'N/A'})</div>
+                <div class="placeholder">No heatmap data available yet</div>
               {/if}
             </div>
           {/if}
-        </div>
-        
-        <div class="sitemap-section">
-          <h3>Site Map</h3>
-          <div class="network-container" bind:this={graphContainer}></div>
         </div>
       </div>
       
@@ -582,109 +775,110 @@
         <!-- Site-wide metrics -->
         <div class="site-metrics">
           <h3>Site-wide Metrics</h3>
-          
-          <div class="metrics-header">
-            <div>
-              <p>Based on {sitePalette.total_images_analyzed || 0} analyzed pages</p>
+            <div class="metrics-header">            <div>
+              <p>Based on {graph?.nodes?.filter(n => n.metrics && n.timestamp && n.timestamp > 0)?.length || 0} analyzed pages</p>
             </div>
-            
-            <div class="metrics-actions">
-              <button class="small-button" on:click={getSitePalette}>
-                Refresh
-              </button>
-            </div>
-          </div>
-          
-          <div class="metrics-cards">
-            <div class="metric-card">
-              <h4>Color Quality</h4>
-              <div class="big-score">
-                {sitePalette.color_score?.toFixed(1) || 'N/A'}
-                <span class="out-of">/10</span>
+          </div>            <div class="metrics-cards">
+              <!-- Neural Score -->
+              <div class="metric-card neural-card">
+                <h4>Neural Score</h4>
+                <div class="big-score">
+                  {sitePalette.neural_score?.toFixed(1) || 'N/A'}
+                  <span class="out-of">/10</span>
+                </div>
+                <div class="score-bar neural-bar" style="width: {(sitePalette.neural_score || 0) * 10}%"></div>
               </div>
-              <div class="score-bar" style="width: {(sitePalette.color_score || 0) * 10}%; background: linear-gradient(90deg, #ff5555, #ffaa55, #55aa55)"></div>
-            </div>
-            
-            <div class="metric-card">
-              <h4>Font Consistency</h4>
-              <div class="big-score">
-                {(sitePalette.avg_font_consistency_score)?.toFixed(1) || 'N/A'} 
-                <span class="out-of">/10</span>
+              
+              <!-- Heatmap Score -->
+              <div class="metric-card heatmap-card">
+                <h4>Click Heat</h4>
+                <div class="big-score">
+                  {sitePalette.click_heat?.toFixed(2) || 'N/A'}
+                  <span class="out-of">avg</span>
+                </div>
+                <div class="score-bar heatmap-bar" style="width: {Math.min((sitePalette.click_heat || 0) * 100, 100)}%"></div>
               </div>
-              <div class="score-bar" style="width: {(sitePalette.avg_font_consistency_score || 0) * 10}%; background: #aa77dd"></div>
-            </div>
-          </div>
-          
-          <div class="metrics-cards">
-            <div class="metric-card">
-              <h4>Neural Score</h4>
-              <div class="big-score">
-                {sitePalette.neural_score?.toFixed(1) || 'N/A'}
-                <span class="out-of">/10</span>
+
+              <!-- Color Quality -->
+              <div class="metric-card color-card">
+                <h4>Color Quality</h4>
+                <div class="big-score">
+                  {sitePalette.color_score?.toFixed(1) || 'N/A'}
+                  <span class="out-of">/10</span>
+                </div>
+                <div class="score-bar color-bar" style="width: {(sitePalette.color_score || 0) * 10}%"></div>
               </div>
-              <div class="score-bar" style="width: {(sitePalette.neural_score || 0) * 10}%; background: #5c7cfa"></div>
-            </div>
-            
-            <div class="metric-card">
-              <h4>Alignment Score</h4>
-              <div class="big-score">
-                {sitePalette.alignment_score?.toFixed(1) || 'N/A'}
-                <span class="out-of">/10</span>
+              
+              <!-- Font Consistency -->
+              <div class="metric-card font-card">
+                <h4>Font Consistency</h4>
+                <div class="big-score">
+                  {(sitePalette.avg_font_consistency_score)?.toFixed(1) || 'N/A'} 
+                  <span class="out-of">/10</span>
+                </div>
+                <div class="score-bar font-bar" style="width: {(sitePalette.avg_font_consistency_score || 0) * 10}%"></div>
               </div>
-              <div class="score-bar" style="width: {(sitePalette.alignment_score || 0) * 10}%; background: #20c997"></div>
+              
+              <!-- Alignment Score -->
+              <div class="metric-card alignment-card">
+                <h4>Alignment Score</h4>
+                <div class="big-score">
+                  {sitePalette.alignment_score?.toFixed(1) || 'N/A'}
+                  <span class="out-of">/10</span>
+                </div>
+                <div class="score-bar alignment-bar" style="width: {(sitePalette.alignment_score || 0) * 10}%"></div>
+              </div>
             </div>
-          </div>
         </div>
         
-        <!-- Color analysis table -->
-        <div class="color-table-section">
+        <!-- Color analysis table -->        <div class="color-table-section">
           <div class="table-header">
             <h3>Page Analysis</h3>
-            
-            <div class="sort-controls">
-              <span>Sort by:</span>
-              <button 
-                class:active={colorSortBy === 'quality'} 
-                on:click={() => colorSortBy = 'quality'}
-              >
-                Quality
-              </button>
-              <button 
-                class:active={colorSortBy === 'colors'} 
-                on:click={() => colorSortBy = 'colors'}
-              >
-                Colors
-              </button>
-            </div>
           </div>
           
           {#if graph && graph.nodes && graph.nodes.length > 0}
             <div class="table-container">
-              <table class="color-table">
-                <thead>
+              <table class="color-table">                  <thead>
                   <tr>
-                    <th>Page</th>
-                    <th>Color</th>
-                    <th>Font</th>
-                    <th>Neural</th>
-                    <th>Alignment</th>
+                    <th class="sortable" on:click={() => sortTable('page')}>
+                      Page
+                      <span class="sort-indicator {sortField === 'page' ? 'active' : ''}">
+                        {sortField === 'page' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </th>
+                    <th class="sortable" on:click={() => sortTable('neural')}>
+                      Neural
+                      <span class="sort-indicator {sortField === 'neural' ? 'active' : ''}">
+                        {sortField === 'neural' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </th>
+                    <th class="sortable" on:click={() => sortTable('heat')}>
+                      Heat
+                      <span class="sort-indicator {sortField === 'heat' ? 'active' : ''}">
+                        {sortField === 'heat' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </th>
+                    <th class="sortable" on:click={() => sortTable('color')}>
+                      Color
+                      <span class="sort-indicator {sortField === 'color' ? 'active' : ''}">
+                        {sortField === 'color' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </th>
+                    <th class="sortable" on:click={() => sortTable('font')}>
+                      Font
+                      <span class="sort-indicator {sortField === 'font' ? 'active' : ''}">
+                        {sortField === 'font' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </th>
+                    <th class="sortable" on:click={() => sortTable('alignment')}>
+                      Alignment
+                      <span class="sort-indicator {sortField === 'alignment' ? 'active' : ''}">
+                        {sortField === 'alignment' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+                      </span>
+                    </th>
                   </tr>
-                </thead>
-                <tbody>
-                  {#each graph.nodes
-                    .filter(n => n.metrics && n.timestamp && n.timestamp > 0) // Ensure node has metrics and a valid timestamp
-                    .sort((a, b) => {
-                      const aColor = a.metrics?.color || 0;
-                      const bColor = b.metrics?.color || 0;
-                      const aFont = (a.metrics?.font || 0); // Scale for sort comparison
-                      const bFont = (b.metrics?.font || 0); // Scale for sort comparison
-                      if (colorSortBy === 'quality') {
-                        return bColor - aColor;
-                      } else { 
-                        return bFont - aFont; 
-                      }
-                    }) as node}
-                    <tr 
+                </thead>                <tbody>
+                  {#each getSortedNodes(graph.nodes.filter(n => n.metrics && n.timestamp && n.timestamp > 0)) as node}<tr 
                       on:click={() => {
                         currentUrl = node.id;
                         uniqueColors = node.metrics?.color || 0;
@@ -697,22 +891,39 @@
                         </div>
                       </td>
                       <td class="score-cell">
-                        <div class="score-pill quality-score" 
-                          style="background: linear-gradient(90deg,
-                            {(node.metrics?.color || 0) < 4 ? '#ff5555' : 
-                             (node.metrics?.color || 0) < 7 ? '#ffaa55' : '#55aa55'})">
-                          {node.metrics?.color?.toFixed(1) || 'N/A'}
-                        </div>
+                        {#if (node.metrics?.neural || 0) > 0}
+                          <div class="score-pill neural-pill" 
+                            style="background-color: {(node.metrics?.neural || 0) < 4 ? '#fee2e2' : 
+                               (node.metrics?.neural || 0) < 7 ? '#fef3c7' : '#dcfce7'};
+                               color: {(node.metrics?.neural || 0) < 4 ? '#dc2626' : 
+                               (node.metrics?.neural || 0) < 7 ? '#d97706' : '#16a34a'};">
+                            {node.metrics?.neural?.toFixed(1)}
+                          </div>
+                        {:else}
+                          N/A
+                        {/if}
                       </td>
                       <td class="score-cell">
-                        {((node.metrics?.font || 0))?.toFixed(1) || 'N/A'}
-                      </td>                      <td class="score-cell">
-                        <div class="score-pill neural-score">
-                          {node.metrics?.neural?.toFixed(1) || 'N/A'}
-                        </div>
+                        {#if (node.click_heat || 0) > 0}
+                          <div class="score-pill heat-pill" 
+                            style="background-color: {(node.click_heat || 0) < 0.5 ? '#fee2e2' : 
+                               (node.click_heat || 0) < 1.0 ? '#fef3c7' : '#dcfce7'};
+                               color: {(node.click_heat || 0) < 0.5 ? '#dc2626' : 
+                               (node.click_heat || 0) < 1.0 ? '#d97706' : '#16a34a'};">
+                            {node.click_heat?.toFixed(2)}
+                          </div>
+                        {:else}
+                          N/A
+                        {/if}
                       </td>
                       <td class="score-cell">
-                        {node.metrics?.alignment?.toFixed(1) || 'N/A'}
+                        {(node.metrics?.color || 0) > 0 ? node.metrics?.color?.toFixed(1) : 'N/A'}
+                      </td>
+                      <td class="score-cell">
+                        {(node.metrics?.font || 0) > 0 ? node.metrics?.font?.toFixed(1) : 'N/A'}
+                      </td>
+                      <td class="score-cell">
+                        {(node.metrics?.alignment || 0) > 0 ? node.metrics?.alignment?.toFixed(1) : 'N/A'}
                       </td>
                     </tr>
                   {/each}
@@ -734,60 +945,98 @@
   *::before,
   *::after {
     box-sizing: border-box;
-  }
-
-  /* Custom Properties for Blue-Pink Gradient */
+  }  /* Custom Properties for Modern Design */
   :root {
-    --color-primary-blue: #2a6af3;
-    --color-secondary-blue: #457af9;
-    --color-light-blue: #e1ebff;
-    --color-primary-pink: #e94b97;
-    --color-secondary-pink: #f06ca9;
-    --color-light-pink: #ffedf6;
-    --gradient-primary: linear-gradient(135deg, var(--color-primary-blue), var(--color-primary-pink));
-    --gradient-subtle: linear-gradient(135deg, var(--color-light-blue), var(--color-light-pink));
+    /* Core Colors */
+    --color-primary-blue: #3b82f6;
+    --color-secondary-blue: #1d4ed8;
+    --color-light-blue: #dbeafe;
+    --color-primary-orange: #f59e0b;
+    --color-secondary-orange: #d97706;
+    --color-light-orange: #fef3c7;
+
+    /* Consolidated Neutrals - Only 4 shades */
+    --color-white: #ffffff;
+    --color-black: #0f1111;
+    --color-gray-dark: #333333;      /* For primary text */
+    --color-gray-medium: #6b7280;    /* For secondary text, icons */
+    --color-gray-light: #e5e7eb;     /* For borders, dividers */
+    --color-gray-lighter: #f1f3f5;   /* For backgrounds, hover states */    /* Core UI Colors */
+    --color-primary: #3498db;
+    --color-primary-hover: #2980b9;
+    --color-primary-bg: #dbeafe;
+    --color-primary-text: #1d4ed8;
+    --color-error: #e74c3c;
+    --color-error-bg: #fee2e2;
+    --color-error-text: #dc2626;
+    --color-success: #2ecc71;
+    --color-success-bg: #dcfce7;
+    --color-success-text: #16a34a;
+    --color-secondary: #8b5cf6;
+
+    /* Orange colors for heatmap */
+    --color-orange-bg: #fef3c7;
+    --color-orange-text: #d97706;
+
+    /* Border and misc */
+    --color-border: #d5d9d9;
+
+    /* Metric Colors */
+    --color-metric-green: #10b981;
+    --color-metric-purple: #8b5cf6;
+    --color-metric-red: #ef4444;
+
+    /* Consolidated Shadows - Only 3 variants */
     --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.07);
+    --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.15);    /* Special Purpose */
+    --shadow-pulse-success: 0 0 5px rgba(46, 204, 113, 0.6);
+    --shadow-button: rgba(213, 217, 217, .5) 0 2px 5px 0;
+    --shadow-text: 0 0 1px rgba(0, 0, 0, 0.3);
+
+    /* Overlays */
+    --overlay-dark: rgba(0, 0, 0, 0.6);
+    --overlay-light: rgba(255, 255, 255, 0.7);
+    --overlay-border: rgba(0, 0, 0, 0.05);
+
+    /* Radii & Transitions */
+    --radius-xs: 4px;
     --radius-sm: 6px;
     --radius-md: 8px;
     --radius-lg: 12px;
     --transition-standard: all 0.2s ease;
-  }
-
-  /* Base Styles and Reset */  :global(body) {
+  }  /* Base Styles and Reset */  
+  :global(body) {
     margin: 0;
     padding: 0;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-    background: linear-gradient(135deg, #f8faff, #fcfaff);
-    color: #333;
+    background: var(--color-white);
+    color: var(--color-gray-dark);
     line-height: 1.6;
     min-height: 100vh;
   }
-
-  h1, h2, h3, h4, h5 {
+  h1, h2, h3, h4 {
     margin: 0;
     font-weight: 600;
   }
   
-  /* Modal Styles */
-  .modal-overlay {
+  /* Modal Styles */  .modal-overlay {
     position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.6);
+    background-color: var(--overlay-dark);
     display: flex;
     justify-content: center;
     align-items: center;
     z-index: 1000;
     backdrop-filter: blur(3px);
   }
-  
-  .modal-container {
-    background-color: white;
-    border-radius: 8px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+    .modal-container {
+    background-color: var(--color-white);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
     width: 500px;
     max-width: 90%;
     padding: 2rem;
@@ -798,15 +1047,14 @@
     from { opacity: 0; transform: translateY(-20px); }
     to { opacity: 1; transform: translateY(0); }
   }
-  
-  .modal-container h2 {
+    .modal-container h2 {
     font-size: 1.8rem;
     margin-bottom: 0.5rem;
-    color: #2c3e50;
+    color: var(--color-gray-dark);
   }
   
   .modal-container p {
-    color: #7f8c8d;
+    color: var(--color-gray-medium);
     margin-bottom: 1.5rem;
   }
   
@@ -815,39 +1063,37 @@
     flex-direction: column;
     gap: 1rem;
   }
-  
-  .modal-content textarea {
+    .modal-content textarea {
     height: 120px;
     padding: 0.75rem;
-    border-radius: 6px;
-    border: 1px solid #ddd;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-gray-light);
     font-size: 1rem;
     resize: none;
     font-family: inherit;
-    background-color: #f8f9fb;
+    background-color: var(--color-gray-lighter);
     transition: border-color 0.2s;
   }
   
   .modal-content textarea:focus {
     outline: none;
-    border-color: #3498db;
+    border-color: var(--color-primary);
     box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
   }
-
   .primary-button {
-    background-color: #3498db;
-    color: white;
+    background-color: var(--color-primary);
+    color: var(--color-white);
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 0.75rem;
     font-size: 1rem;
     font-weight: 600;
     cursor: pointer;
-    transition: background-color 0.2s, transform 0.1s;
+    transition: var(--transition-standard);
   }
   
   .primary-button:hover {
-    background-color: #2980b9;
+    background-color: var(--color-primary-hover);
   }
   
   .primary-button:active {
@@ -855,34 +1101,42 @@
   }
   
   .primary-button:disabled {
-    background-color: #95a5a6;
+    background-color: var(--color-gray-medium);
     cursor: not-allowed;
   }
-  
-  .error-message {
-    color: #e74c3c;
-    background-color: rgba(231, 76, 60, 0.1);
+    .error-message {
+    color: var(--color-error);
+    background-color: var(--color-error-bg);
     padding: 0.5rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     font-size: 0.9rem;
-    border-left: 3px solid #e74c3c;
+    border-left: 3px solid var(--color-error);
   }
-  
-  /* Dashboard Layout */
-  .dashboard-container {
+  /* Dashboard Layout */  .dashboard-container {
     display: flex;
     flex-direction: column;
     height: 100vh;
     overflow: hidden;
+    background: var(--color-white);
+  }
+
+  .main-header {
+    background-color: var(--color-white);
+    border-bottom: 1px solid var(--color-gray-light);
+    padding: 0.75rem 1rem;
   }
   
-  header {
-    background-color: white;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-    padding: 1rem;
+  .timeline-section {
+    background-color: var(--color-white);
+    border-bottom: 1px solid var(--color-gray-light);
+    padding: 0.5rem 1rem;
+  }
+  
+  .header-content {
     display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
+    justify-content: space-between;
+    align-items: center;
+    min-height: 3rem;
   }
   
   .logo {
@@ -892,21 +1146,40 @@
     gap: 1rem;
   }
   
-  .logo h1 {
-    font-size: 1.5rem;
-    color: #2c3e50;
+  .header-status {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    font-size: 0.85rem;
+  }
+    .status-item {
+    color: var(--color-gray-medium);
   }
   
-  .status-indicator {
+  .status-value {
+    color: var(--color-gray-dark);
+    font-weight: 600;
+  }
+    .logo h1 {
+    font-size: 1.25rem;
+    color: var(--color-gray-dark);
+    font-weight: 600;
+    margin: 0;
+  }    .status-indicator {
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background-color: #ccc;
+    background-color: var(--color-error-text); /* Red for disconnected */
+    transition: var(--transition-standard);
+  }
+  
+  .status-indicator.connected {
+    background-color: var(--color-primary-orange); /* Yellow for connected but not running */
   }
   
   .status-indicator.active {
-    background-color: #2ecc71;
-    box-shadow: 0 0 5px rgba(46, 204, 113, 0.6);
+    background-color: var(--color-success); /* Green for active/running */
+    box-shadow: var(--shadow-pulse-success);
     animation: pulse 2s infinite;
   }
   
@@ -914,285 +1187,126 @@
     0% { box-shadow: 0 0 0 0 rgba(46, 204, 113, 0.6); }
     70% { box-shadow: 0 0 0 5px rgba(46, 204, 113, 0); }
     100% { box-shadow: 0 0 0 0 rgba(46, 204, 113, 0); }
-  }
-  
-  .timeline {
-    background-color: #f8f9fa;
-    border-radius: 6px;
+  }  .timeline {
+    background: transparent;
+    border: none;
+    border-radius: 0;
     overflow-x: auto;
     white-space: nowrap;
-    padding: 0.5rem;
-    border: 1px solid #eee;
-  }
-  
-  .timeline-events {
+    padding: 0.5rem 0;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
     display: flex;
-    gap: 0.5rem;
+    align-items: center;
+    justify-content: flex-start;
+    min-height: 2.5rem;
+    width: 100%;
   }
   
+  .timeline::-webkit-scrollbar {
+    display: none;
+  }
+    .timeline-events {
+    display: flex;
+    gap: 1rem;
+    width: 100%;
+    padding: 0 0.5rem;
+  }
   .timeline-event {
     display: inline-flex;
     flex-direction: column;
-    background-color: white;
-    border-radius: 4px;
-    padding: 0.5rem;
-    min-width: 140px;
-    border: 1px solid #e0e0e0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    transition: transform 0.2s;
+    background-color: var(--color-white);
+    border-radius: var(--radius-sm);
+    padding: 1rem;
+    min-width: 160px;
+    border: 1px solid var(--color-gray-light);
+    transition: var(--transition-standard);
+    box-shadow: var(--shadow-sm);
+    position: relative;
+    overflow: hidden;
   }
   
   .timeline-event:hover {
     transform: translateY(-2px);
-    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow-md);
   }
   
-  .time {
-    font-size: 0.7rem;
-    color: #7f8c8d;
+  .event-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+    .event-time {
+    font-size: 0.75rem;
+    color: var(--color-gray-medium);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
   }
   
   .event-url {
-    font-weight: 600;
-    font-size: 0.85rem;
+    font-weight: 700;
+    font-size: 0.9rem;
     text-overflow: ellipsis;
     overflow: hidden;
-  }
-  
-  .event-metrics {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 0.3rem;
-    font-size: 0.75rem;
-  }
-  
-  .color-count {
-    background-color: #e74c3c;
-    color: white;
-    border-radius: 3px;
-    padding: 1px 4px;
-  }
-  
-  .font-score {
-    background-color: #9b59b6;
-    color: white;
-    border-radius: 3px;
-    padding: 1px 4px;
-  }
-  
-  .timeline-empty {
+    color: var(--color-gray-dark);
+    white-space: nowrap;
+  }  .timeline-empty {
     text-align: center;
-    padding: 1rem;
-    color: #95a5a6;
+    padding: 0.75rem 1rem;
+    color: var(--color-gray-medium);
     font-style: italic;
-  }
-  
-  .status-bar {
+    background-color: var(--color-white);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-gray-light);
+    box-shadow: var(--shadow-sm);
+    margin: 0 0.5rem;
     display: flex;
     align-items: center;
-    gap: 1rem;
-    font-size: 0.8rem;
-    padding: 0.5rem 1rem;
-    background-color: #f1f3f5;
-    border-radius: 6px;
+    justify-content: center;
+    min-height: 2rem;
   }
-  
-  .current-url {
-    flex-grow: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-family: monospace;
-  }
-    .refresh-button {
-    padding: 0.2rem 0.6rem;
-    background-color: white;
-    color: #333;
-    border: 1px solid transparent;
-    border-radius: 4px;
-    font-size: 0.8rem;
-    cursor: pointer;
-    position: relative;
-    transition: all 0.2s ease;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
-    z-index: 1;
-  }
-  
-  .refresh-button::before {
-    content: "";
-    position: absolute;
-    top: -2px;
-    left: -2px;
-    right: -2px;
-    bottom: -2px;
-    border-radius: 6px;
-    padding: 2px;
-    background: linear-gradient(135deg, #2193b0, #6dd5ed, #cc2b5e);
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    z-index: -1;
-  }
-  
-  .refresh-button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    .timeline-placeholder {
+    font-size: 0.9rem;
+    font-weight: 500;
   }
   
   .main-content {
     display: flex;
     flex-grow: 1;
     overflow: hidden;
-  }
-    .left-panel {
+  }  .left-panel {
     width: 33%;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid rgba(0, 0, 0, 0.03);
-    overflow: auto;
-    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.02);
-    z-index: 2;
+    border-right: 1px solid var(--color-gray-light);
+    background-color: var(--color-white);
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  
+  .left-panel::-webkit-scrollbar {
+    display: none;
   }
   
   .right-panel {
     width: 67%;
     display: flex;
     flex-direction: column;
-    overflow: auto;
-    background-color: #f8fafc;
-  }
-  
-  /* Left Panel Sections */
-  .screenshot-section {
-    padding: 1rem;
-    border-bottom: 1px solid #e0e0e0;
-  }
-    .screenshot-section h3 {
-    margin-bottom: 1rem;
-    color: #2c3e50;
-    font-weight: 600;
-    position: relative;
-    padding-left: 12px;
-  }
-  
-  .screenshot-section h3::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    height: 18px;
-    width: 4px;
-    background-image: linear-gradient(to bottom, #2193b0, #cc2b5e);
-    border-radius: 4px;
-  }
-    .screenshot-container {
-    max-height: 50vh;
-    overflow: auto;
-    border: 1px solid rgba(0, 0, 0, 0.04);
-    border-radius: 10px;
-    background-color: white;
-    margin-bottom: 1rem;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
-    transition: all 0.3s ease;
-  }
-  
-  .screenshot-container:hover {
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.07);
-  }
-  
-  .screenshot-container img {
-    width: 100%;
-    display: block;
-  }
-  
-  .page-metrics {
-    display: flex;
-    gap: 1rem;
-    flex-wrap: wrap;
-    margin-top: 0.5rem;
-  }
-    .metric {
-    background-color: white;
-    border-radius: 6px;
-    padding: 0.75rem;
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.04);
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: calc(50% - 0.5rem);
-    transition: all 0.2s ease;
-    border: 1px solid rgba(0,0,0,0.03);
-  }
-  
-  .metric:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
-  }
-  
-  .metric-label {
-    font-size: 0.7rem;
-    color: #7f8c8d;
-    margin-bottom: 0.3rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  
-  .metric-value {
-    font-size: 1.2rem;
-    font-weight: bold;
-    background: linear-gradient(90deg, #2193b0, #cc2b5e);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-  
-  .sitemap-section {
-    padding: 1rem;
-    flex-grow: 1;
-    display: flex;
-    flex-direction: column;
-  }
-    .sitemap-section h3 {
-    margin-bottom: 1rem;
-    color: #2c3e50;
-    font-weight: 600;
-    position: relative;
-    padding-left: 12px;
-  }
-  
-  .sitemap-section h3::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    height: 18px;
-    width: 4px;
-    background-image: linear-gradient(to bottom, #2193b0, #cc2b5e);
-    border-radius: 4px;
-    color: #2c3e50;
-  }
-  
-  .network-container {
-    flex-grow: 1;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    background-color: #f8f9fa;
-    position: relative;
-    height: 300px; /* Minimum height */
-  }
-  
-  /* Right Panel Sections */
+    overflow: hidden;
+    background-color: var(--color-white);
+  }  /* Screenshot container inside accordion */
+    /* Right Panel Sections */
   .site-metrics {
     padding: 1.5rem;
-    background-color: white;
-    border-bottom: 1px solid #e0e0e0;
+    background-color: var(--color-white);
+    border-bottom: 1px solid var(--color-border);
   }
   
   .site-metrics h3 {
     margin-bottom: 1rem;
-    color: #2c3e50;
+    color: var(--color-gray-dark);
   }
   
   .metrics-header {
@@ -1204,117 +1318,108 @@
   
   .metrics-header p {
     margin: 0;
-    color: #7f8c8d;
+    color: var(--color-gray-medium);
     font-size: 0.9rem;
   }
-  
-  .metrics-actions {
+    .metrics-cards {
     display: flex;
-    gap: 0.5rem;
-  }
-  
-  .small-button {
-    background-color: #f1f3f5;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 0.2rem 0.5rem;
-    font-size: 0.75rem;
-    cursor: pointer;
-    color: #555;
-  }
-  
-  .small-button:hover {
-    background-color: #e9ecef;
-  }
-  
-  .metrics-cards {
-    display: flex;
-    gap: 1.5rem;
+    gap: 1rem;
     margin-bottom: 1.5rem;
   }
     .metric-card {
-    background-color: white;
-    border-radius: 10px;
-    padding: 1.25rem;
+    background-color: var(--color-white);
+    border-radius: var(--radius-sm);
+    padding: 1rem;
     flex: 1;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.04);
+    box-shadow: var(--shadow-sm);
     position: relative;
     overflow: hidden;
-    transition: all 0.3s ease;
-    border: 1px solid rgba(0,0,0,0.02);
+    transition: var(--transition-standard);
+    border: 1px solid var(--color-gray-light);
   }
   
   .metric-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
   }
   
   .metric-card h4 {
-    font-size: 0.85rem;
-    margin-bottom: 0.75rem;
-    color: #7f8c8d;
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+    color: var(--color-gray-medium);
     text-transform: uppercase;
-    letter-spacing: 0.7px;
+    letter-spacing: 0.5px;
     font-weight: 600;
   }
   
   .big-score {
-    font-size: 2.5rem;
+    font-size: 1.8rem;
     font-weight: bold;
-    color: #2c3e50;
-    margin-bottom: 0.75rem;
-    transition: all 0.3s ease;
+    color: var(--color-gray-dark);
+    margin-bottom: 0.5rem;
+    transition: var(--transition-standard);
+  }
+    /* Unique colors for each metric */
+  .neural-card .big-score {
+    color: var(--color-primary);
   }
   
-  /* Special styling for Neural Score */
-  .metric-card:nth-child(1) .big-score {
-    background: linear-gradient(90deg, #2193b0, #cc2b5e);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+  .heatmap-card .big-score {
+    color: var(--color-primary-orange);
   }
   
-  .out-of {
-    font-size: 1rem;
-    color: #95a5a6;
+  .color-card .big-score {
+    color: var(--color-success);
+  }
+  
+  .font-card .big-score {
+    color: var(--color-secondary);
+  }
+  
+  .alignment-card .big-score {
+    color: var(--color-error);
+  }
+  /* Pill styling for neural and heatmap scores */
+  .neural-pill {
+    background-color: var(--color-primary-bg);
+    color: var(--color-primary-text);
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    display: inline-block;
+    border: none;
+    text-shadow: none;
+    box-shadow: none;
+  }
+    .out-of {
+    font-size: 0.9rem;
+    color: var(--color-gray-medium);
     font-weight: normal;
   }
     .score-bar {
-    height: 6px;
-    border-radius: 3px;
-    background-image: linear-gradient(90deg, #2193b0, #6dd5ed, #cc2b5e);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    height: 4px;
+    border-radius: 2px;
     transition: width 0.5s ease-out;
   }
   
-  .site-palette-display {
-    display: flex;
-    height: 40px;
-    border-radius: 6px;
-    overflow: hidden;
-    margin-top: 1rem;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  /* Unique bar colors */
+  .neural-bar {
+    background-color: var(--color-primary);
   }
   
-  .site-color-block {
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  .heatmap-bar {
+    background-color: var(--color-primary-orange);
   }
   
-  .site-color-code {
-    font-size: 0.7rem;
-    background-color: rgba(255, 255, 255, 0.7);
-    padding: 2px 4px;
-    border-radius: 2px;
-    font-family: monospace;
-    opacity: 0;
-    transition: opacity 0.2s;
+  .color-bar {
+    background-color: var(--color-success);
   }
   
-  .site-color-block:hover .site-color-code {
-    opacity: 1;
+  .font-bar {
+    background-color: var(--color-secondary);
+  }
+  
+  .alignment-bar {
+    background-color: var(--color-error);
   }
   
   .color-table-section {
@@ -1330,38 +1435,10 @@
     align-items: center;
     margin-bottom: 1rem;
   }
-  
-  .sort-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.8rem;
-  }
-  
-  .sort-controls button {
-    background: none;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 0.2rem 0.6rem;
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-  
-  .sort-controls button:hover {
-    background-color: #f1f3f5;
-  }
-  
-  .sort-controls button.active {
-    background-color: #3498db;
-    color: white;
-    border-color: #2980b9;
-  }
-  
-  .table-container {
-    background-color: white;
-    border-radius: 6px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    .table-container {
+    background-color: var(--color-white);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-sm);
     overflow: hidden;
     margin-bottom: 1.5rem;
   }
@@ -1369,62 +1446,58 @@
   .color-table {
     width: 100%;
     border-collapse: collapse;
-  }
-  
-  .color-table th {
+  }  .color-table th {
     padding: 0.75rem;
     text-align: left;
-    color: #495057;
-    border-bottom: 1px solid #e0e0e0;
+    color: var(--color-gray-medium);
+    border-bottom: 1px solid var(--color-border);
     font-weight: 600;
-    position: relative;
-    cursor: pointer;
     user-select: none;
+    cursor: pointer;
+    position: relative;
+    transition: var(--transition-standard);
   }
   
-  .color-table th::after {
-    content: "⇅";
+  .color-table th:hover {
+    background-color: var(--color-gray-lighter);
+  }
+  
+  .color-table th.sortable {
+    padding-right: 2rem;
+  }
+    .sort-indicator {
     position: absolute;
-    right: 8px;
-    color: #adb5bd;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.75rem;
+    color: var(--color-gray-medium);
     opacity: 0.5;
-    font-size: 0.8rem;
+    transition: var(--transition-standard);
   }
   
-  .color-table th.sorted-asc::after {
-    content: "↑";
-    color: #2193b0;
+  .sort-indicator.active {
     opacity: 1;
-  }
-  
-  .color-table th.sorted-desc::after {
-    content: "↓";
-    color: #cc2b5e;
-    opacity: 1;
-  }
-  
-  .color-table th:hover::after {
-    opacity: 1;
+    color: var(--color-primary);
   }
   
   .color-table td {
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid #f1f3f5;
+    border-bottom: 1px solid var(--color-gray-lighter);
     font-size: 0.9rem;
   }
-  
   .color-table tr:hover {
-    background-color: rgba(33, 147, 176, 0.03);
+    background-color: var(--color-gray-lighter);
     cursor: pointer;
   }
   
   .color-table tr {
-    transition: all 0.2s ease;
+    transition: var(--transition-standard);
   }
   
   .color-table tr:hover {
     transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.05);
+    box-shadow: var(--shadow-sm);
     position: relative;
     z-index: 5;
   }
@@ -1442,179 +1515,38 @@
   .score-cell {
     width: 80px;
     text-align: center;
-  }
-  
-  .count-cell {
-    width: 60px;
-    text-align: center;
-    font-weight: bold;
-  }
-  
-  .palette-preview-cell {
-    width: 180px;
-  }
-  
-  .palette-preview {
-    display: flex;
-    gap: 2px;
-  }
-  
-  .mini-color-block {
-    height: 24px;
-    flex: 1;
-    border-radius: 2px;
-  }
-    .score-pill {
+  }.score-pill {
     display: inline-block;
     padding: 0.2rem 0.5rem;
     border-radius: 20px;
-    color: white;
+    color: var(--color-white);
     font-weight: bold;
     font-size: 0.8rem;
-    text-shadow: 0 0 1px rgba(0, 0, 0, 0.3);
+    text-shadow: var(--shadow-text);
     text-align: center;
     min-width: 28px;
-    background-image: linear-gradient(135deg, #2193b0, #6dd5ed, #cc2b5e);
-    background-size: 200% 200%;
-    animation: gradient-shift 5s ease infinite;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    background-color: var(--color-gray-medium);
+    box-shadow: var(--shadow-sm);
   }
-  
-  @keyframes gradient-shift {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-  }
-  
-  .selected-page-palette {
-    background-color: white;
-    border-radius: 6px;
-    padding: 1rem;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-  }
-  
-  .selected-page-palette h4 {
-    margin-bottom: 0.75rem;
-    font-size: 0.9rem;
-    color: #7f8c8d;
-  }
-    .palette-display {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    padding: 0.75rem;
-    background: linear-gradient(135deg, rgba(33, 147, 176, 0.03), rgba(204, 43, 94, 0.03));
-    border-radius: 8px;
-    border: 1px solid rgba(0, 0, 0, 0.02);
-  }
-    .color-block {
+  .color-block {
     height: 42px;
     flex: 1;
     min-width: 80px;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
     position: relative;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
-    transition: all 0.2s ease;
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    outline: 1px solid rgba(0, 0, 0, 0.05);
+    box-shadow: var(--shadow-sm);
+    transition: var(--transition-standard);
+    border: 2px solid var(--overlay-light);
+    outline: 1px solid var(--overlay-border);
   }
   
   .color-block:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-  }
-  
-  .color-code {
-    font-size: 0.7rem;
-    background-color: rgba(255, 255, 255, 0.7);
-    padding: 2px 4px;
-    border-radius: 2px;
-    font-family: monospace;
-  }
-  
-  .placeholder {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 200px;
-    color: #95a5a6;
-    font-style: italic;
-  }
-  
-  .placeholder.centered {
-    height: 150px;
-    background-color: white;
-    border-radius: 6px;
-  }
-  
-  /* Visualization Section Styles */
-  .visualization-section {
-    padding: 1rem;
-    border-bottom: 1px solid #e0e0e0;
-  }
-  
-  .visualization-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-  }
-    .toggle-button {
-    display: flex;
-    align-items: center;
-    background-color: white;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 0.4rem 0.8rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    position: relative;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
-    z-index: 1;
-  }
-  
-  .toggle-button::before {
-    content: "";
-    position: absolute;
-    top: -1px;
-    left: -1px;
-    right: -1px;
-    bottom: -1px;
-    border-radius: 7px;
-    padding: 1px;
-    background: linear-gradient(135deg, #2193b0, #6dd5ed, #cc2b5e);
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    z-index: -1;
-  }
-  
-  .toggle-button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.08);
-  }
-  
-  .toggle-arrow {
-    margin-right: 0.4rem;
-    font-size: 0.7rem;
-    transform: rotate(90deg);
-    display: inline-block;
-  }
-  
-  .font-size-visualization {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    padding: 0.5rem;
-    background-color: #f8f9fa;
-    border-radius: 6px;
-    border: 1px solid #e0e0e0;
-  }
+    box-shadow: var(--shadow-md);
+  }/* Visualization styles for accordion content */
   
   .font-size-group {
     display: flex;
@@ -1622,15 +1554,14 @@
     align-items: center;
     min-width: 65px;
     padding: 0.75rem 0.5rem;
-    background-color: white;
-    border-radius: 8px;
-    box-shadow: 0 3px 10px rgba(0,0,0,0.04);
-    transition: all 0.2s ease;
-    border: 1px solid rgba(0,0,0,0.02);
+    background-color: var(--color-white);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-sm);
+    transition: var(--transition-standard);
+    border: 1px solid var(--overlay-border);
     position: relative;
     overflow: hidden;
   }
-  
   .font-size-group::before {
     content: "";
     position: absolute;
@@ -1638,12 +1569,12 @@
     left: 0;
     width: 100%;
     height: 3px;
-    background: linear-gradient(90deg, #2193b0, #cc2b5e);
+    background: var(--color-gray-medium);
   }
   
   .font-size-group:hover {
     transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(0,0,0,0.07);
+    box-shadow: var(--shadow-md);
   }
   
   .font-size-sample {
@@ -1652,13 +1583,118 @@
   
   .font-size-info {
     font-size: 0.7rem;
-    color: #7f8c8d;
+    color: var(--color-gray-medium);  }/* Heatmap Accordion Styles */
+
+  .heatmap-container-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  .heatmap-image {
+    width: 70%;
+    object-fit: contain;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-sm);
+    border: 2px solid var(--color-white);
+    transform: scaleY(-1); /* Fix for upside-down heatmap */
+    background-color: var(--color-white);
+  }
+
+  .heatmap-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 1rem;
+    padding: 0.75rem 1.5rem;
+    background-color: var(--color-white);
+    border-radius: 25px;
+    box-shadow: var(--shadow-sm);
+    font-size: 0.9rem;
+    border: 1px solid var(--color-border);
+  }  .legend-gradient {
+    width: 80px;
+    height: 14px;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(to right, var(--color-primary), var(--color-primary-orange), var(--color-error));
+    border: 1px solid var(--color-border);
+  }
+
+  .legend-label {
+    color: var(--color-gray-dark);
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+
+  .placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    color: var(--color-gray-medium);
+    font-style: italic;
+  }
+  /* Left Panel Accordion Styles */
+  .accordion-section {
+    background-color: var(--color-white);
   }
   
-  .neural-score {
-    background-image: linear-gradient(135deg, #2193b0, #6dd5ed, #cc2b5e);
-    background-size: 200% 200%;
-    animation: gradient-shift 5s ease infinite;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  .accordion-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    cursor: pointer;
+    background-color: var(--color-gray-lighter);
+    transition: var(--transition-standard);
+    user-select: none;
+    border-top: 1px solid var(--color-gray-light);
+    border-bottom: 0px;
   }
+  .accordion-header.expanded {
+    border-bottom: 1px solid var(--color-gray-light);
+  }
+  
+  .accordion-header:hover {
+    background-color: var(--color-gray-light);
+  }
+  
+  .accordion-header h3 {
+    margin: 0;
+    color: var(--color-gray-dark);
+    font-weight: 600;
+    font-size: 1rem;
+  }
+  
+  .accordion-icon {
+    transition: var(--transition-standard);
+    color: var(--color-gray-medium);
+    font-size: 0.8rem;
+  }
+  
+  .accordion-icon.expanded {
+    transform: rotate(180deg);
+  }
+  /* Placeholder text styling */
+  .placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-gray-medium);
+    font-style: italic;
+    font-size: 0.9rem;
+    text-align: center;
+    min-height: 120px;
+    padding: 1rem;
+    width: 100%;
+  }
+  
+  .placeholder.centered {
+    min-height: 200px;
+  }
+
 </style>
